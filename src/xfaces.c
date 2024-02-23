@@ -5294,7 +5294,10 @@ gui_supports_face_attributes_p (struct frame *f,
 				def_attrs[LFACE_STRIKE_THROUGH_INDEX]))
       || (!UNSPECIFIEDP (lattrs[LFACE_BOX_INDEX])
 	  && face_attr_equal_p (lattrs[LFACE_BOX_INDEX],
-				def_attrs[LFACE_BOX_INDEX])))
+				def_attrs[LFACE_BOX_INDEX]))
+      || (!UNSPECIFIEDP (lattrs[LFACE_SHADOW_INDEX])
+	  && face_attr_equal_p (lattrs[LFACE_SHADOW_INDEX],
+				def_attrs[LFACE_SHADOW_INDEX])))
     return false;
 
   /* Check font-related attributes, as those are the most commonly

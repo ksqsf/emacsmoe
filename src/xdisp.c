@@ -8187,6 +8187,7 @@ get_next_display_element (struct it *it)
 #endif	/* HAVE_WINDOW_SYSTEM */
 
  done:
+
   /* Is this character the last one of a run of characters with
      box?  If yes, set IT->end_of_box_run_p to true.  */
   if (it->face_box_p

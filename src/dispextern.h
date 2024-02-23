@@ -2548,6 +2548,17 @@ struct it
      where the `^' can be replaced by a display table entry.  */
   bool_bf ctl_arrow_p : 1;
 
+  /* True means that the current face has a shadow. */
+  bool_bf face_shadow_p : 1;
+
+  /* Non-null means that the current character is the first in a run
+     of characters with shadow face. */
+  bool_bf start_of_shadow_run_p : 1;
+
+  /* True means that the current character is the last in a run of
+     characters with shadow face. */
+  bool_bf end_of_shadow_run_p : 1;
+
   /* True means that the current face has a box.  */
   bool_bf face_box_p : 1;
 

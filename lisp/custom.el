@@ -462,7 +462,8 @@ Each DISPLAY can have the following values:
 In the ATTS property list, possible attributes are `:family',
 `:width', `:height', `:weight', `:slant', `:underline',
 `:overline', `:strike-through', `:box', `:foreground',
-`:background', `:stipple', `:inverse-video', and `:inherit'.
+`:background', `:stipple', `:inverse-video', `:shadow', and
+`:inherit'.
 
 See Info node `(elisp) Faces' in the Emacs Lisp manual for more
 information."

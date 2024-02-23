@@ -185,7 +185,6 @@
 	     (const :tag "Off" nil)
 	     (const :tag "On" t)
 	     (color :tag "Colored")))
-
     (:box
      ;; Fixme: this can probably be done better.
      (choice :tag "Box around text"
@@ -271,6 +270,10 @@
 	     :help-echo "Control whether attributes should be extended after EOL."
 	     (const :tag "Off" nil)
 	     (const :tag "On" t)))
+
+    (:shadow
+     (number :tag "radius" :value 10.0))
+
     (:inherit
      (repeat :tag "Inherit"
 	     :help-echo "List of faces to inherit attributes from."
