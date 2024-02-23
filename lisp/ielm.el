@@ -1,6 +1,6 @@
 ;;; ielm.el --- interaction mode for Emacs Lisp  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1994, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1994, 2001-2024 Free Software Foundation, Inc.
 
 ;; Author: David Smith <maa036@lancaster.ac.uk>
 ;; Maintainer: emacs-devel@gnu.org
@@ -110,6 +110,13 @@ This gives more frame width for large indented sexps, and allows functions
 such as `edebug-defun' to work with such inputs."
   :type 'boolean)
 
+(defcustom ielm-history-file-name
+  (locate-user-emacs-file "ielm-history.eld")
+  "If non-nil, name of the file to read/write IELM input history."
+  :type '(choice (const :tag "Disable input history" nil)
+                 file)
+  :version "30.1")
+
 (defvaralias 'inferior-emacs-lisp-mode-hook 'ielm-mode-hook)
 (defcustom ielm-mode-hook nil
   "Hooks to be run when IELM (`inferior-emacs-lisp-mode') is started."
@@ -148,9 +155,8 @@ such as `edebug-defun' to work with such inputs."
 This variable is buffer-local.")
 
 (defvar ielm-header
-  (substitute-command-keys
    "*** Welcome to IELM ***  Type (describe-mode) or press \
-\\[describe-mode] for help.\n")
+\\[describe-mode] for help.\n"
   "Message to display when IELM is started.")
 
 (defvaralias 'inferior-emacs-lisp-mode-map 'ielm-map)
@@ -492,13 +498,28 @@ addition to `comint-indirect-setup-hook', run this hook with the
 indirect buffer as the current buffer after its setup is done.
 This can be used to further customize fontification and other
 behavior of the indirect buffer."
-  :type 'boolean
-  :safe 'booleanp
+  :type 'hook
   :version "29.1")
 
 (defun ielm-indirect-setup-hook ()
   "Run `ielm-indirect-setup-hook'."
   (run-hooks 'ielm-indirect-setup-hook))
+
+(defun ielm--expand-ellipsis (orig-fun beg &rest args)
+  (let ((end (copy-marker (apply orig-fun beg args) t)))
+    (funcall pp-default-function beg end)
+    end))
+
+;;; Input history
+
+(defvar ielm--exit nil
+  "Function to call when Emacs is killed.")
+
+(defun ielm--input-history-writer (buf)
+  "Return a function writing IELM input history to BUF."
+  (lambda ()
+    (with-current-buffer buf
+      (comint-write-input-ring))))
 
 ;;; Major mode
 
@@ -582,6 +603,8 @@ Customized bindings may be defined in `ielm-map', which currently contains:
   (setq-local comment-use-syntax t)
   (setq-local lexical-binding t)
 
+  (add-function :around (local 'cl-print-expand-ellipsis-function)
+                #'ielm--expand-ellipsis)
   (setq-local indent-line-function #'ielm-indent-line)
   (setq-local ielm-working-buffer (current-buffer))
   (setq-local fill-paragraph-function #'lisp-fill-paragraph)
@@ -600,12 +623,23 @@ Customized bindings may be defined in `ielm-map', which currently contains:
             #'ielm-indirect-setup-hook 'append t)
   (setq comint-indirect-setup-function #'emacs-lisp-mode)
 
+  ;; Input history
+  (setq-local comint-input-ring-file-name ielm-history-file-name)
+  (setq-local ielm--exit (ielm--input-history-writer (current-buffer)))
+  (setq-local kill-buffer-hook
+              (lambda ()
+                (funcall ielm--exit)
+                (remove-hook 'kill-emacs-hook ielm--exit)))
+  (unless noninteractive
+    (add-hook 'kill-emacs-hook ielm--exit))
+  (comint-read-input-ring t)
+
   ;; A dummy process to keep comint happy. It will never get any input
   (unless (comint-check-proc (current-buffer))
     ;; Was cat, but on non-Unix platforms that might not exist, so
     ;; use hexl instead, which is part of the Emacs distribution.
     (condition-case nil
-        (start-process "ielm" (current-buffer) "hexl")
+        (start-process "ielm" (current-buffer) hexl-program-name)
       (file-error (start-process "ielm" (current-buffer) "cat")))
     (set-process-query-on-exit-flag (ielm-process) nil)
     (goto-char (point-max))
@@ -615,7 +649,7 @@ Customized bindings may be defined in `ielm-map', which currently contains:
     (setq-local comint-inhibit-carriage-motion t)
 
     ;; Add a silly header
-    (insert ielm-header)
+    (insert (substitute-command-keys ielm-header))
     (ielm-set-pm (point-max))
     (unless comint-use-prompt-regexp
       (let ((inhibit-read-only t))

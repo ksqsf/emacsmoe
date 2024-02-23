@@ -1,6 +1,6 @@
 ;;; help-fns.el --- Complex help functions -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1986, 1993-1994, 1998-2023 Free Software
+;; Copyright (C) 1985-1986, 1993-1994, 1998-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -152,6 +152,17 @@ edited even if this option is enabled."
   :group 'help
   :version "28.1")
 
+(defcustom help-display-function-type t
+  "Whether to display type specifiers of functions in \"*Help*\" buffers.
+
+The type specifier of a function is returned by `comp-function-type-spec',
+which see.  When this variable is non-nil, \\[describe-function] will \
+display the function's
+type specifier when available."
+  :type 'boolean
+  :group 'help
+  :version "30.1")
+
 (defun help--symbol-class (s)
   "Return symbol class characters for symbol S."
   (when (stringp s)
@@ -229,7 +240,11 @@ interactive command."
                (lambda (f) (if want-command
                           (commandp f)
                         (or (fboundp f) (get f 'function-documentation))))
-               'confirm nil nil
+               ;; We used `confirm' for a while because we may want to see the
+               ;; meta-info about a function even if the function itself is not
+               ;; defined, but this use case is too marginal and rarely tested,
+               ;; not worth the trouble (bug#64902).
+               t nil nil
                (and fn (symbol-name fn)))))
     (unless (equal val "")
       (setq fn (intern val)))
@@ -354,7 +369,8 @@ if the variable `help-downcase-arguments' is non-nil."
       (setq doc (replace-regexp-in-string
                  ;; This is heuristic, but covers all common cases
                  ;; except ARG1-ARG2
-                 (concat "\\<"                   ; beginning of word
+                 (concat "([^ ]+ .*"             ; skip function name
+                         "\\<"                   ; beginning of word
                          "\\(?:[a-z-]*-\\)?"     ; for xxx-ARG
                          "\\("
                          (regexp-quote arg)
@@ -437,7 +453,7 @@ the C sources, too."
       (setq file-name
 	    (locate-file file-name load-path '(".el" ".elc") 'readable)))
      ((and (stringp file-name)
-	   (string-match "[.]*loaddefs.el\\'" file-name))
+	   (string-match "[.]*loaddefs.elc?\\'" file-name))
       ;; An autoloaded variable or face.  Visit loaddefs.el in a buffer
       ;; and try to extract the defining file.  The following form is
       ;; from `describe-function-1' and `describe-variable'.
@@ -592,22 +608,22 @@ the C sources, too."
     ;; First collect all the printed representations of menus.
     (dolist (menu menus)
       (let ((map (lookup-key global-map (seq-take menu 1)))
-            (string nil))
+            (string nil)
+            (sep (if (char-displayable-p ?→) " → " " => ")))
         (seq-do-indexed
          (lambda (entry level)
            (when (symbolp map)
              (setq map (symbol-function map)))
            (when-let ((elem (assq entry (cdr map))))
              (when (> level 0)
-               (push (if (char-displayable-p ?→)
-                         " → "
-                       " => ")
-                     string))
+               (push sep string))
              (if (eq (nth 1 elem) 'menu-item)
                  (progn
-                   (push (nth 2 elem) string)
+                   (push (propertize (nth 2 elem) 'face 'help-key-binding)
+                         string)
                    (setq map (cadddr elem)))
-               (push (nth 1 elem) string)
+               (push (propertize (nth 1 elem) 'face 'help-key-binding)
+                     string)
                (setq map (cddr elem)))))
          (cdr (seq-into menu 'list)))
         (when string
@@ -622,8 +638,7 @@ the C sources, too."
           (cond ((zerop i) "")
                 ((= i (1- (length menus))) " and ")
                 (t ", "))
-          (propertize (string-join (nreverse string))
-                      'face 'help-key-binding)))
+          (string-join (nreverse string))))
        strings))))
 
 (defun help-fns--compiler-macro (function)
@@ -711,23 +726,43 @@ the C sources, too."
               (high-doc (cdr high)))
           (unless (and (symbolp function)
                        (get function 'reader-construct))
-            (insert high-usage "\n"))
+            (insert high-usage "\n")
+            (when-let* ((gate help-display-function-type)
+                        (res (comp-function-type-spec function))
+                        (type-spec (car res))
+                        (kind (cdr res)))
+              (insert (format
+                       (if (eq kind 'inferred)
+                           "\nInferred type: %s\n"
+                         "\nType: %s\n")
+                       type-spec))))
           (fill-region fill-begin (point))
           high-doc)))))
 
 (defun help-fns--parent-mode (function)
   ;; If this is a derived mode, link to the parent.
-  (let ((parent-mode (and (symbolp function)
-                          (get function
-                               'derived-mode-parent))))
+  (when (symbolp function)
+    (let ((parent-mode (get function 'derived-mode-parent))
+          (extra-parents (get function 'derived-mode-extra-parents)))
     (when parent-mode
       (insert (substitute-quotes "  Parent mode: `"))
       (let ((beg (point)))
-        (insert (format "%s" parent-mode))
+        (insert (format "%S" parent-mode))
         (make-text-button beg (point)
                           'type 'help-function
                           'help-args (list parent-mode)))
-      (insert (substitute-quotes "'.\n")))))
+      (insert (substitute-quotes "'.\n")))
+    (when extra-parents
+      (insert (format "  Extra parent mode%s:" (if (cdr extra-parents) "s" "")))
+      (dolist (parent extra-parents)
+        (insert (substitute-quotes " `"))
+        (let ((beg (point)))
+          (insert (format "%S" parent))
+          (make-text-button beg (point)
+                            'type 'help-function
+                            'help-args (list parent)))
+        (insert (substitute-quotes "'")))
+      (insert ".\n")))))
 
 (defun help-fns--obsolete (function)
   ;; Ignore lambda constructs, keyboard macros, etc.
@@ -743,7 +778,7 @@ the C sources, too."
 	      " is obsolete")
       (when (nth 2 obsolete)
         (insert (format " since %s" (nth 2 obsolete))))
-      (insert (cond ((stringp use) (concat "; " use))
+      (insert (cond ((stringp use) (concat "; " (substitute-quotes use)))
                     (use (format-message "; use `%s' instead." use))
                     (t "."))
               "\n")
@@ -996,7 +1031,8 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                                               (symbol-name function)))))))
 	 (real-def (cond
                     ((and aliased (not (subrp def)))
-                     (car (function-alias-p real-function)))
+                     (or (car (function-alias-p real-function))
+                         real-function))
 		    ((subrp def) (intern (subr-name def)))
                     (t def))))
 
@@ -1060,10 +1096,8 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
 		  (concat beg "byte-compiled Lisp function"))
                  ((module-function-p def)
                   (concat beg "module function"))
-		 ((eq (car-safe def) 'lambda)
+		 ((memq (car-safe def) '(lambda closure))
 		  (concat beg "Lisp function"))
-		 ((eq (car-safe def) 'closure)
-		  (concat beg "Lisp closure"))
 		 ((keymapp def)
 		  (let ((is-full nil)
 			(elts (cdr-safe def)))
@@ -1138,7 +1172,7 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
     ;; key substitution constructs, load the library.
     (and (autoloadp real-def) doc-raw
          help-enable-autoload
-         (string-match "\\([^\\]=\\|[^=]\\|\\`\\)\\\\[[{<]" doc-raw)
+         (string-match "\\([^\\]=\\|[^=]\\|\\`\\)\\\\[[{<]\\|`.*'" doc-raw)
          (autoload-do-load real-def))
 
     (help-fns--key-bindings function)
@@ -1727,8 +1761,7 @@ If FRAME is omitted or nil, use the selected frame."
 		     (called-interactively-p 'interactive))
     (unless face
       (setq face 'default))
-    (if (not (listp face))
-        (setq face (list face)))
+    (setq face (ensure-list face))
     (with-help-window (help-buffer)
       (with-current-buffer standard-output
         (dolist (f face (buffer-string))
@@ -1766,9 +1799,8 @@ If FRAME is omitted or nil, use the selected frame."
                            alias)
                         ""))))
 		  (insert "\nDocumentation:\n"
-                          (substitute-command-keys
-                           (or (face-documentation face)
-                               "Not documented as a face."))
+                          (or (face-documentation face)
+                              "Not documented as a face.")
 			  "\n\n"))
 	        (with-current-buffer standard-output
 		  (save-excursion
@@ -2060,11 +2092,9 @@ keymap value."
         (if (symbolp keymap)
             (error "Not a keymap variable: %S" keymap)
           (error "Not a keymap")))
-      (let ((sym nil))
-        (unless sym
-          (setq sym (cl-gentemp "KEYMAP OBJECT (no variable) "))
-          (setq used-gentemp t)
-          (set sym keymap))
+      (let ((sym (cl-gentemp "KEYMAP OBJECT (no variable) ")))
+        (setq used-gentemp t)
+        (set sym keymap)
         (setq keymap sym)))
     ;; Follow aliasing.
     (setq keymap (or (ignore-errors (indirect-variable keymap)) keymap))
@@ -2104,6 +2134,12 @@ keymap value."
     (when used-gentemp
       (makunbound keymap))))
 
+(defcustom describe-mode-outline t
+  "Non-nil enables outlines in the output buffer of `describe-mode'."
+  :type 'boolean
+  :group 'help
+  :version "30.1")
+
 ;;;###autoload
 (defun describe-mode (&optional buffer)
   "Display documentation of current major mode and minor modes.
@@ -2116,7 +2152,10 @@ variable \(listed in `minor-mode-alist') must also be a function
 whose documentation describes the minor mode.
 
 If called from Lisp with a non-nil BUFFER argument, display
-documentation for the major and minor modes of that buffer."
+documentation for the major and minor modes of that buffer.
+
+When `describe-mode-outline' is non-nil, Outline minor mode
+is enabled in the Help buffer."
   (interactive "@")
   (unless buffer
     (setq buffer (current-buffer)))
@@ -2130,13 +2169,20 @@ documentation for the major and minor modes of that buffer."
       (with-current-buffer (help-buffer)
         ;; Add the local minor modes at the start.
         (when local-minors
-          (insert (format "Minor mode%s enabled in this buffer:"
-                          (if (length> local-minors 1)
-                              "s" "")))
+          (unless describe-mode-outline
+            (insert (format "Minor mode%s enabled in this buffer:"
+                            (if (length> local-minors 1)
+                                "s" ""))))
           (describe-mode--minor-modes local-minors))
 
         ;; Document the major mode.
         (let ((major (buffer-local-value 'major-mode buffer)))
+          (when describe-mode-outline
+            (goto-char (point-min))
+            (put-text-property
+             (point) (progn (insert (format "Major mode %S" major)) (point))
+             'outline-level 1)
+            (insert "\n\n"))
           (insert "The major mode is "
                   (buttonize
                    (propertize (format-mode-line
@@ -2160,36 +2206,56 @@ documentation for the major and minor modes of that buffer."
 
           ;; Insert the global minor modes after the major mode.
           (when global-minor-modes
-            (insert (format "Global minor mode%s enabled:"
-                            (if (length> global-minor-modes 1)
-                                "s" "")))
-            (describe-mode--minor-modes global-minor-modes)
-            (when (re-search-forward "^\f")
-              (beginning-of-line)
-              (ensure-empty-lines 1)))
+            (unless describe-mode-outline
+              (insert (format "Global minor mode%s enabled:"
+                              (if (length> global-minor-modes 1)
+                                  "s" ""))))
+            (describe-mode--minor-modes global-minor-modes t)
+            (unless describe-mode-outline
+              (when (re-search-forward "^\f")
+                (beginning-of-line)
+                (ensure-empty-lines 1))))
+
+          (when describe-mode-outline
+            (setq-local outline-search-function #'outline-search-level)
+            (setq-local outline-level (lambda () 1))
+            (setq-local outline-minor-mode-cycle t
+                        outline-minor-mode-highlight t
+                        outline-minor-mode-use-buttons 'insert)
+            (outline-minor-mode 1))
+
           ;; For the sake of IELM and maybe others
           nil)))))
 
-(defun describe-mode--minor-modes (modes)
+(defun describe-mode--minor-modes (modes &optional global)
   (dolist (mode (seq-sort #'string< modes))
     (let ((pretty-minor-mode
            (capitalize
             (replace-regexp-in-string
              "\\(\\(-minor\\)?-mode\\)?\\'" ""
              (symbol-name mode)))))
-      (insert
-       " "
-       (buttonize
-        pretty-minor-mode
-        (lambda (mode)
-          (goto-char (point-min))
-          (text-property-search-forward
-           'help-minor-mode mode t)
-          (beginning-of-line))
-        mode))
+      (if (not describe-mode-outline)
+          (insert
+           " "
+           (buttonize
+            pretty-minor-mode
+            (lambda (mode)
+              (goto-char (point-min))
+              (text-property-search-forward
+               'help-minor-mode mode t)
+              (beginning-of-line))
+            mode))
+        (goto-char (point-max))
+        (put-text-property
+         (point) (progn (insert (if global "Global" "Local")
+                                (format " minor mode %S" mode))
+                        (point))
+         'outline-level 1)
+        (insert "\n\n"))
       (save-excursion
-	(goto-char (point-max))
-	(insert "\n\n\f\n")
+	(unless describe-mode-outline
+          (goto-char (point-max))
+	  (insert "\n\n\f\n"))
 	;; Document the minor modes fully.
         (insert (buttonize
                  (propertize pretty-minor-mode 'help-minor-mode mode)
@@ -2203,11 +2269,14 @@ documentation for the major and minor modes of that buffer."
 			    (format "indicator%s"
 				    indicator)))))
 	(insert (or (help-split-fundoc (documentation mode) nil 'doc)
-	            "No docstring")))))
-  (forward-line -1)
-  (fill-paragraph nil)
-  (forward-paragraph 1)
-  (ensure-empty-lines 1))
+	            "No docstring"))
+        (when describe-mode-outline
+          (insert "\n\n")))))
+  (unless describe-mode-outline
+    (forward-line -1)
+    (fill-paragraph nil)
+    (forward-paragraph 1)
+    (ensure-empty-lines 1)))
 
 (defun help-fns--list-local-commands ()
   (let ((functions nil))
@@ -2220,7 +2289,7 @@ documentation for the major and minor modes of that buffer."
                   (not (get sym 'byte-obsolete-info))
                   ;; Ignore everything bound.
                   (not (where-is-internal sym nil t))
-                  (apply #'derived-mode-p (command-modes sym)))
+                  (derived-mode-p (command-modes sym)))
          (push sym functions))))
     (with-temp-buffer
       (when functions

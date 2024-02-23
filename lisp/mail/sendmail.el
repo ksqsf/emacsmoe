@@ -1,6 +1,6 @@
 ;;; sendmail.el --- mail sending commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1992-1996, 1998, 2000-2023 Free Software
+;; Copyright (C) 1985-1986, 1992-1996, 1998, 2000-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -151,11 +151,11 @@ not a valid RFC 822 (or later) header or continuation line,
 that matches the variable `mail-header-separator'.
 This is used by the default mail-sending commands.  See also
 `message-send-mail-function' for use with the Message package."
-  :type '(radio (function-item sendmail-send-it :tag "Use Sendmail package")
-		(function-item sendmail-query-once :tag "Query the user")
-		(function-item smtpmail-send-it :tag "Use SMTPmail package")
-		(function-item feedmail-send-it :tag "Use Feedmail package")
-		(function-item mailclient-send-it :tag "Use Mailclient package")
+  :type '(radio (function-item sendmail-send-it)
+                (function-item sendmail-query-once)
+                (function-item :doc "Use SMTPmail package." smtpmail-send-it)
+                (function-item feedmail-send-it)
+                (function-item mailclient-send-it)
 		function)
   :version "24.1")
 
@@ -269,7 +269,6 @@ The default value matches citations like `foo-bar>' plus whitespace."
 (defvar mail-abbrevs-loaded nil)
 (defvar mail-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "\M-\t" 'completion-at-point)
     (define-key map "\C-c?" 'describe-mode)
     (define-key map "\C-c\C-f\C-t" 'mail-to)
     (define-key map "\C-c\C-f\C-b" 'mail-bcc)

@@ -1,6 +1,6 @@
 ;;; lisp.el --- Lisp editing commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1994, 2000-2023 Free Software Foundation,
+;; Copyright (C) 1985-1986, 1994, 2000-2024 Free Software Foundation,
 ;; Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -92,12 +92,22 @@ report errors as appropriate for this kind of usage."
   (forward-sexp (- arg) interactive))
 
 (defun mark-sexp (&optional arg allow-extend)
-  "Set mark ARG sexps from point.
-The place mark goes is the same place \\[forward-sexp] would
-move to with the same argument.
-Interactively, if this command is repeated
-or (in Transient Mark mode) if the mark is active,
-it marks the next ARG sexps after the ones already marked.
+  "Set mark ARG sexps from point or move mark one sexp.
+When called from Lisp with ALLOW-EXTEND omitted or nil, mark is
+set ARG sexps from point.
+With ARG and ALLOW-EXTEND both non-nil (interactively, with prefix
+argument), the place to which mark goes is the same place \\[forward-sexp]
+would move to with the same argument; if the mark is active, it moves
+ARG sexps from its current position, otherwise it is set ARG sexps
+from point.
+When invoked interactively without a prefix argument and no active
+region, mark moves one sexp forward.
+When invoked interactively without a prefix argument, and region
+is active, mark moves one sexp away of point (i.e., forward
+if mark is at or after point, back if mark is before point), thus
+extending the region by one sexp.  Since the direction of region
+extension depends on the relative position of mark and point, you
+can change the direction by \\[exchange-point-and-mark].
 This command assumes point is not in a string or comment."
   (interactive "P\np")
   (cond ((and allow-extend
@@ -412,7 +422,8 @@ of a defun, nil if it failed to find one."
 				       "\\(?:" defun-prompt-regexp "\\)\\s(")
 			     "^\\s(")
 			                      nil 'move arg))
-                    (nth 8 (syntax-ppss))))
+                    (save-match-data
+                      (nth 8 (syntax-ppss)))))
            found)
 	 (progn (goto-char (1- (match-end 0)))
                 t)))
@@ -878,7 +889,7 @@ The option `delete-pair-blink-delay' can disable blinking."
   "Raise N sexps one level higher up the tree.
 
 This function removes the sexp enclosing the form which follows
-point, and then re-inserts N sexps that originally followe point,
+point, and then re-inserts N sexps that originally followed point,
 thus raising those N sexps one level up.
 
 Interactively, N is the numeric prefix argument, and defaults to 1.

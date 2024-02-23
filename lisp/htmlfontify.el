@@ -1,6 +1,6 @@
 ;;; htmlfontify.el --- htmlize a buffer/source tree with optional hyperlinks -*- lexical-binding: t -*-
 
-;; Copyright (C) 2002-2003, 2009-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2002-2003, 2009-2024 Free Software Foundation, Inc.
 
 ;; Emacs Lisp Archive Entry
 ;; Package: htmlfontify
@@ -308,13 +308,14 @@ done;")
   :tag   "etags-cmd-alist"
   :type  '(alist :key-type (string) :value-type (string)))
 
-(defcustom hfy-etags-bin "etags"
+(defcustom hfy-etags-bin etags-program-name
   "Location of etags binary (we begin by assuming it's in your path).
 
 Note that if etags is not in your path, you will need to alter the shell
 commands in `hfy-etags-cmd-alist'."
   :tag   "etags-bin"
-  :type  '(file))
+  :type  '(file)
+  :version "30.1")
 
 (defcustom hfy-shell-file-name "/bin/sh"
   "Shell (Bourne or compatible) to invoke for complex shell operations."
@@ -757,7 +758,9 @@ may happen."
                             255))
                        '(0 1 2))))))
 
-(defun hfy-family (family) (list (cons "font-family"  family)))
+(defun hfy-family (family)
+  (list (cons "font-family"
+              (format "\"%s\"" (string-replace "\"" "\\\\\"" family)))))
 (defun hfy-bgcol  (color) (list (cons "background"   (hfy-triplet color))))
 (defun hfy-color (color) (list (cons "color"        (hfy-triplet color))))
 (define-obsolete-function-alias 'hfy-colour #'hfy-color "27.1")

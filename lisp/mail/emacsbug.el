@@ -1,6 +1,6 @@
 ;;; emacsbug.el --- command to report Emacs bugs to appropriate mailing list  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1985-2024 Free Software Foundation, Inc.
 
 ;; Author: K. Shane Hartman
 ;; Maintainer: emacs-devel@gnu.org
@@ -144,6 +144,10 @@ This requires either the macOS \"open\" command, or the freedesktop
                (goto-char (point-min))
                (buffer-substring (line-beginning-position)
                                  (line-end-position))))))
+        ((eq system-type 'android)
+         ;; This is a short string containing the Android version,
+         ;; build number, and window system distributor.
+         (symbol-value 'android-build-fingerprint))
         ;; TODO Cygwin, Solaris (usg-unix-v).
         (t
          (or (let ((file "/etc/os-release"))
@@ -229,9 +233,11 @@ Already submitted bugs can be found in the Emacs bug tracker:
           (set-frame-parameter nil 'unsplittable nil))
       (error nil))
     (compose-mail report-emacs-bug-address topic)
+    (rfc822-goto-eoh)
+    (insert "X-Debbugs-Cc: \n")
     ;; The rest of this does not execute if the user was asked to
     ;; confirm and said no.
-    (when (eq major-mode 'message-mode)
+    (when (derived-mode-p 'message-mode)
       ;; Message-mode sorts the headers before sending.  We sort now so
       ;; that report-emacs-bug-orig-text remains valid.  (Bug#5178)
       (message-sort-headers)
@@ -455,12 +461,16 @@ and send the mail again%s."
     (setq send-mail-function (sendmail-query-user-about-smtp))
     (when (derived-mode-p 'message-mode)
       (setq message-send-mail-function (message-default-send-mail-function))
-      (add-hook 'message-sent-hook
-                (lambda ()
-                  (when (y-or-n-p "Save this mail sending choice?")
-                    (customize-save-variable 'send-mail-function
-                                             send-mail-function)))
-                nil t)))
+      ;; Don't ask the question below if we are going to ignore it in
+      ;; 'customize-save-variable' anyway.
+      (unless (or (null user-init-file)
+                  (and (null custom-file) init-file-had-error))
+        (add-hook 'message-sent-hook
+                  (lambda ()
+                    (when (y-or-n-p "Save this mail sending choice?")
+                      (customize-save-variable 'send-mail-function
+                                               send-mail-function)))
+                  nil t))))
   (or report-emacs-bug-no-confirmation
       ;; mailclient.el does not need a valid From
       (eq send-mail-function 'mailclient-send-it)
@@ -501,7 +511,7 @@ Message buffer where you can explain more about the patch."
      (list (read-string (format-prompt "This patch is about" guess)
                         nil nil guess)
            file)))
-  (switch-to-buffer "*Patch Help*")
+  (pop-to-buffer-same-window "*Patch Help*")
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert "Thank you for considering submitting a patch to the Emacs project.\n\n"

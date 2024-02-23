@@ -1,9 +1,9 @@
 ;;; printing.el --- printing utilities  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2000-2001, 2003-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Vinicius Jose Latorre <viniciusjl.gnu@gmail.com>
-;; Keywords: wp, print, PostScript
+;; Keywords: text, print, PostScript
 ;; Old-Version: 6.9.3
 ;; URL: https://www.emacswiki.org/cgi-bin/wiki/ViniciusJoseLatorre
 
@@ -1148,8 +1148,7 @@ Used by `pr-menu-bind' and `pr-update-menus'.")
 
 (defun pr-menu-get-item (name-list)
   ;; NAME-LIST is a string or a list of strings.
-  (or (listp name-list)
-      (setq name-list (list name-list)))
+  (setq name-list (ensure-list name-list))
   (and name-list
        (let* ((reversed (reverse name-list))
 	      (name (easy-menu-intern (car reversed)))
@@ -5519,7 +5518,7 @@ COMMAND.exe, COMMAND.bat and COMMAND.com in this order."
 	  (setq ext (cdr ext)
 		found nil))
 	found)
-    ;; non-windows systems
+    ;; non-Windows systems
     (and (file-regular-p cmd)
 	 (file-executable-p cmd)
 	 cmd)))

@@ -1,6 +1,6 @@
 /* Window creation, deletion and examination for GNU Emacs.
    Does not include redisplay.
-   Copyright (C) 1985-1987, 1993-1998, 2000-2023 Free Software
+   Copyright (C) 1985-1987, 1993-1998, 2000-2024 Free Software
    Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -526,7 +526,7 @@ select_window (Lisp_Object window, Lisp_Object norecord,
     /* Do not select a tooltip window (Bug#47207).  */
     error ("Cannot select a tooltip window");
 
-  /* We deinitely want to select WINDOW, not the mini-window.  */
+  /* We definitely want to select WINDOW, not the mini-window.  */
   f->select_mini_window_flag = false;
 
   /* Make the selected window's buffer current.  */
@@ -1680,7 +1680,8 @@ check_window_containing (struct window *w, void *user_data)
 
 Lisp_Object
 window_from_coordinates (struct frame *f, int x, int y,
-			 enum window_part *part, bool tab_bar_p, bool tool_bar_p)
+			 enum window_part *part, bool menu_bar_p,
+			 bool tab_bar_p, bool tool_bar_p)
 {
   Lisp_Object window;
   struct check_window_data cw;
@@ -1692,6 +1693,21 @@ window_from_coordinates (struct frame *f, int x, int y,
   window = Qnil;
   cw.window = &window, cw.x = x, cw.y = y; cw.part = part;
   foreach_window (f, check_window_containing, &cw);
+
+#if defined (HAVE_WINDOW_SYSTEM) && ! defined (HAVE_EXT_MENU_BAR)
+  /* If not found above, see if it's in the menu bar window, if a menu
+     bar exists.  */
+  if (NILP (window)
+      && menu_bar_p
+      && WINDOWP (f->menu_bar_window)
+      && WINDOW_TOTAL_LINES (XWINDOW (f->menu_bar_window)) > 0
+      && (coordinates_in_window (XWINDOW (f->menu_bar_window), x, y)
+	  != ON_NOTHING))
+    {
+      *part = ON_TEXT;
+      window = f->menu_bar_window;
+    }
+#endif
 
 #if defined (HAVE_WINDOW_SYSTEM)
   /* If not found above, see if it's in the tab bar window, if a tab
@@ -1729,8 +1745,11 @@ window_from_coordinates (struct frame *f, int x, int y,
 DEFUN ("window-at", Fwindow_at, Swindow_at, 2, 3, 0,
        doc: /* Return window containing coordinates X and Y on FRAME.
 FRAME must be a live frame and defaults to the selected one.
-The top left corner of the frame is considered to be row 0,
-column 0.  */)
+X and Y are measured in units of canonical columns and rows.
+The top left corner of the frame is considered to be column 0, row 0.
+Tool-bar and tab-bar pseudo-windows are ignored by this function: if
+the specified coordinates are in any of these two windows, this
+function returns nil.  */)
   (Lisp_Object x, Lisp_Object y, Lisp_Object frame)
 {
   struct frame *f = decode_live_frame (frame);
@@ -1743,7 +1762,7 @@ column 0.  */)
 				   + FRAME_INTERNAL_BORDER_WIDTH (f)),
 				  (FRAME_PIXEL_Y_FROM_CANON_Y (f, y)
 				   + FRAME_INTERNAL_BORDER_WIDTH (f)),
-				  0, false, false);
+				  0, false, false, false);
 }
 
 ptrdiff_t
@@ -3511,7 +3530,10 @@ window-start value is reasonable when this function is called.  */)
 void
 replace_buffer_in_windows (Lisp_Object buffer)
 {
-  call1 (Qreplace_buffer_in_windows, buffer);
+  /* When kill-buffer is called early during loadup, this function is
+     undefined.  */
+  if (!NILP (Ffboundp (Qreplace_buffer_in_windows)))
+    call1 (Qreplace_buffer_in_windows, buffer);
 }
 
 /* If BUFFER is shown in a window, safely replace it with some other
@@ -3807,7 +3829,7 @@ run_window_change_functions_1 (Lisp_Object symbol, Lisp_Object buffer,
 	     frame.  Make sure to record changes for each live frame
 	     in window_change_record later.  */
 	  window_change_record_frames = true;
-	  safe_call1 (XCAR (funs), window_or_frame);
+	  safe_calln (XCAR (funs), window_or_frame);
 	}
 
       funs = XCDR (funs);
@@ -4129,6 +4151,8 @@ set_window_buffer (Lisp_Object window, Lisp_Object buffer,
 			     buffer);
       w->start_at_line_beg = false;
       w->force_start = false;
+      /* Flush the base_line cache since it applied to another buffer.  */
+      w->base_line_number = 0;
     }
 
   wset_redisplay (w);
@@ -4825,10 +4849,9 @@ values.  */)
   return Qt;
 }
 
+/* Resize frame F's windows when F's inner height (inner width if
+   HORFLAG is true) has been set to SIZE pixels.  */
 
-/**
-Resize frame F's windows when F's inner height (inner width if HORFLAG
-is true) has been set to SIZE pixels.  */
 void
 resize_frame_windows (struct frame *f, int size, bool horflag)
 {
@@ -5310,7 +5333,17 @@ resize_mini_window_apply (struct window *w, int delta)
   w->pixel_top = r->pixel_top + r->pixel_height;
   w->top_line = r->top_line + r->total_lines;
 
-  /* Enforce full redisplay of the frame.  */
+  /* Enforce full redisplay of the frame.  If f->redisplay is already
+     set, which it generally is in the wake of a ConfigureNotify
+     (frame resize) event, merely setting f->redisplay is insufficient
+     for redisplay_internal to continue redisplaying the frame, as
+     redisplay_internal cannot distinguish between f->redisplay set
+     before it calls redisplay_window and that after, so garbage the
+     frame as well.  */
+
+  if (f->redisplay)
+    SET_FRAME_GARBAGED (f);
+
   /* FIXME: Shouldn't some of the caller do it?  */
   fset_redisplay (f);
   adjust_frame_glyphs (f);
@@ -5347,7 +5380,14 @@ grow_mini_window (struct window *w, int delta)
       grow = call3 (Qwindow__resize_root_window_vertically,
 		    root, make_fixnum (- delta), Qt);
 
-      if (FIXNUMP (grow) && window_resize_check (r, false))
+      if (FIXNUMP (grow)
+	  /* It might be impossible to resize the window, in which case
+	     calling resize_mini_window_apply will set off an infinite
+	     loop where the redisplay cycle so forced returns to
+	     resize_mini_window, making endless attempts to expand the
+	     minibuffer window to this impossible size.  (bug#69140) */
+	  && XFIXNUM (grow) != 0
+	  && window_resize_check (r, false))
 	resize_mini_window_apply (w, -XFIXNUM (grow));
     }
 }
@@ -7411,7 +7451,7 @@ the return value is nil.  Otherwise the value is t.  */)
 	do_switch_frame (NILP (dont_set_frame)
                          ? data->selected_frame
                          : old_frame
-                         , 0, Qnil);
+                         , 0, 0, Qnil);
     }
 
   FRAME_WINDOW_CHANGE (f) = true;
@@ -7805,7 +7845,11 @@ means no margin.
 
 Leave margins unchanged if WINDOW is not large enough to accommodate
 margins of the desired width.  Return t if any margin was actually
-changed and nil otherwise.  */)
+changed and nil otherwise.
+
+The margins specified by calling this function may be later overridden
+by invoking `set-window-buffer' for the same WINDOW, with its
+KEEP-MARGINS argument nil or omitted.  */)
   (Lisp_Object window, Lisp_Object left_width, Lisp_Object right_width)
 {
   struct window *w = set_window_margins (decode_live_window (window),

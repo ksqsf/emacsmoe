@@ -1,15 +1,15 @@
 ;;; org.el --- Outline-based notes management and organizer -*- lexical-binding: t; -*-
 
 ;; Carstens outline-mode for keeping track of everything.
-;; Copyright (C) 2004-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2024 Free Software Foundation, Inc.
 ;;
 ;; Author: Carsten Dominik <carsten.dominik@gmail.com>
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
-;; Keywords: outlines, hypermedia, calendar, wp
+;; Keywords: outlines, hypermedia, calendar, text
 ;; URL: https://orgmode.org
 ;; Package-Requires: ((emacs "26.1"))
 
-;; Version: 9.6.1
+;; Version: 9.6.15
 
 ;; This file is part of GNU Emacs.
 ;;
@@ -297,47 +297,49 @@ default, only Emacs Lisp is loaded, since it has no specific
 requirement."
   :group 'org-babel
   :set 'org-babel-do-load-languages
-  :version "24.1"
+  :package-version '(Org . "9.6")
   :type '(alist :tag "Babel Languages"
 		:key-type
 		(choice
 		 (const :tag "Awk" awk)
-		 (const :tag "C" C)
+		 (const :tag "C, D, C++, and cpp" C)
 		 (const :tag "R" R)
                  (const :tag "Calc" calc)
-		 (const :tag "Clojure" clojure)
+		 (const :tag "Clojure and ClojureScript" clojure)
 		 (const :tag "CSS" css)
 		 (const :tag "Ditaa" ditaa)
 		 (const :tag "Dot" dot)
                  (const :tag "Emacs Lisp" emacs-lisp)
+                 (const :tag "Eshell" eshell)
 		 (const :tag "Forth" forth)
 		 (const :tag "Fortran" fortran)
-		 (const :tag "Gnuplot" gnuplot)
+		 (const :tag "GnuPlot" gnuplot)
+		 (const :tag "Groovy" groovy)
 		 (const :tag "Haskell" haskell)
                  (const :tag "Java" java)
-		 (const :tag "Javascript" js)
-		 (const :tag "LaTeX" latex)
-                 (const :tag "Lilypond" lilypond)
+		 (const :tag "JavaScript" js)
+                 (const :tag "Julia" julia)
+                 (const :tag "LaTeX" latex)
+                 (const :tag "LilyPond" lilypond)
 		 (const :tag "Lisp" lisp)
+                 (const :tag "Lua" lua)
 		 (const :tag "Makefile" makefile)
 		 (const :tag "Maxima" maxima)
-		 (const :tag "Matlab" matlab)
-                 (const :tag "Ocaml" ocaml)
-		 (const :tag "Octave" octave)
+                 (const :tag "OCaml" ocaml)
+		 (const :tag "Octave and MatLab" octave)
 		 (const :tag "Org" org)
 		 (const :tag "Perl" perl)
-		 (const :tag "Pico Lisp" picolisp)
+                 (const :tag "Processing" processing)
 		 (const :tag "PlantUML" plantuml)
 		 (const :tag "Python" python)
 		 (const :tag "Ruby" ruby)
 		 (const :tag "Sass" sass)
-		 (const :tag "Scala" scala)
 		 (const :tag "Scheme" scheme)
 		 (const :tag "Screen" screen)
+                 (const :tag "Sed" sed)
 		 (const :tag "Shell Script" shell)
                  (const :tag "Sql" sql)
-		 (const :tag "Sqlite" sqlite)
-		 (const :tag "Stan" stan))
+		 (const :tag "Sqlite" sqlite))
 		:value-type (boolean :tag "Activate" :value t)))
 
 ;;;; Customization variables
@@ -1019,7 +1021,7 @@ time."
 This is useful since some lines containing links can be very long and
 uninteresting.  Also tables look terrible when wrapped.
 
-The variable `org-startup-truncated' allows to configure
+The variable `org-startup-truncated' enables you to configure
 truncation for Org mode different to the other modes that use the
 variable `truncate-lines' and as a shortcut instead of putting
 the variable `truncate-lines' into the `org-mode-hook'.  If one
@@ -1228,7 +1230,7 @@ This applies to indirect buffers created with the commands
 Valid values are:
 current-window   Display in the current window
 other-window     Just display in another window.
-dedicated-frame  Create one new frame, and re-use it each time.
+dedicated-frame  Create one new frame, and reuse it each time.
 new-frame        Make a new frame each time.  Note that in this case
                  previously-made indirect buffers are kept, and you need to
                  kill these buffers yourself."
@@ -1319,14 +1321,15 @@ Possible values for the file identifier are:
                      to open [[file:document.pdf::5]] with evince at page 5.
 
                  Likely, you will need more entries: without page
-                 number; with search pattern; with cross-reference
-                 anchor; some combination of options.  Consider simple
-                 pattern here and a Lisp function to determine command
-                 line arguments instead.  Passing argument list to
-                 `call-process' or `make-process' directly allows to
-                 avoid treating some character in peculiar file names
-                 as shell specialls causing executing part of file
-                 name as a subcommand.
+                 number; with search pattern; with
+                 cross-reference anchor; some combination of
+                 options.  Consider simple pattern here and a
+                 Lisp function to determine command line
+                 arguments instead.  Passing an argument list to
+                 `call-process' or `make-process' directly avoids
+                 treating some character in peculiar file names
+                 as shell specials that prompt parts of said file
+                 names to be executed as subcommands.
 
  `directory'   Matches a directory
  `remote'      Matches a remote file, accessible through tramp.
@@ -3481,13 +3484,17 @@ Make sure that you only list packages here which:
   :group 'org-export-latex
   :set 'org-set-packages-alist
   :get 'org-get-packages-alist
-  :type '(repeat
-	  (choice
-	   (list :tag "options/package pair"
-		 (string :tag "options")
-		 (string :tag "package")
-		 (boolean :tag "Snippet"))
-	   (string :tag "A line of LaTeX"))))
+  :type
+  '(repeat
+    (choice
+     (list :tag "options/package pair"
+           (string :tag "options")
+           (string :tag "package")
+           (boolean :tag "snippet")
+           (choice
+            (const :tag "All compilers include this package" nil)
+            (repeat :tag "Only include from these compilers" string)))
+     (string :tag "A line of LaTeX"))))
 
 (defgroup org-appearance nil
   "Settings for Org mode appearance."
@@ -3598,13 +3605,13 @@ following symbols:
 	       (const :tag "Entities" entities))))
 
 (defcustom org-hide-emphasis-markers nil
-  "Non-nil mean font-lock should hide the emphasis marker characters."
+  "Non-nil means font-lock should hide the emphasis marker characters."
   :group 'org-appearance
   :type 'boolean
   :safe #'booleanp)
 
 (defcustom org-hide-macro-markers nil
-  "Non-nil mean font-lock should hide the brackets marking macro calls."
+  "Non-nil means font-lock should hide the brackets marking macro calls."
   :group 'org-appearance
   :type 'boolean)
 
@@ -3616,7 +3623,7 @@ When nil, the \\name form remains in the buffer."
   :type 'boolean)
 
 (defcustom org-pretty-entities-include-sub-superscripts t
-  "Non-nil means, pretty entity display includes formatting sub/superscripts."
+  "Non-nil means pretty entity display includes formatting sub/superscripts."
   :group 'org-appearance
   :version "24.1"
   :type 'boolean)
@@ -3754,7 +3761,6 @@ This is needed for font-lock setup.")
 (defvar calc-embedded-close-formula)
 (defvar calc-embedded-open-formula)
 (defvar calc-embedded-open-mode)
-(defvar font-lock-unfontify-region-function)
 (defvar org-agenda-tags-todo-honor-ignore-options)
 (defvar remember-data-file)
 (defvar texmathp-why)
@@ -4559,21 +4565,25 @@ is available.  This option applies only if FILE is a URL."
      (cache)
      (is-url
       (if (org--should-fetch-remote-resource-p file)
-          (with-current-buffer (url-retrieve-synchronously file)
-            (goto-char (point-min))
-            ;; Move point to after the url-retrieve header.
-            (search-forward "\n\n" nil :move)
-            ;; Search for the success code only in the url-retrieve header.
-            (if (save-excursion
-                  (re-search-backward "HTTP.*\\s-+200\\s-OK" nil :noerror))
-                ;; Update the cache `org--file-cache' and return contents.
-                (puthash file
-                         (buffer-substring-no-properties (point) (point-max))
-                         org--file-cache)
-              (funcall (if noerror #'message #'user-error)
-                       "Unable to fetch file from %S"
-                       file)
-              nil))
+          (condition-case error
+              (with-current-buffer (url-retrieve-synchronously file)
+                (goto-char (point-min))
+                ;; Move point to after the url-retrieve header.
+                (search-forward "\n\n" nil :move)
+                ;; Search for the success code only in the url-retrieve header.
+                (if (save-excursion
+                      (re-search-backward "HTTP.*\\s-+200\\s-OK" nil :noerror))
+                    ;; Update the cache `org--file-cache' and return contents.
+                    (puthash file
+                             (buffer-substring-no-properties (point) (point-max))
+                             org--file-cache)
+                  (funcall (if noerror #'message #'user-error)
+                           "Unable to fetch file from %S"
+                           file)
+                  nil))
+            (error (if noerror
+                       (message "Org couldn't download \"%s\": %s %S" file (car error) (cdr error))
+                     (signal (car error) (cdr error)))))
         (funcall (if noerror #'message #'user-error)
                  "The remote resource %S is considered unsafe, and will not be downloaded."
                  file)))
@@ -5364,7 +5374,7 @@ by a #."
 			  (zero-or-more (any " \t"))
 			  (group (group (zero-or-more (not (any " \t\n"))))
 				 (zero-or-more (any " \t"))
-				 (group (zero-or-more any)))))
+				 (group (zero-or-more nonl)))))
 	   limit t)
       (let ((beg (match-beginning 0))
 	    (end-of-beginline (match-end 0))
@@ -5390,7 +5400,7 @@ by a #."
 						    "#+end"
 						    ,(match-string 4)
 						    word-end
-						    (zero-or-more any)))))
+						    (zero-or-more nonl)))))
 		 ;; We look further than LIMIT on purpose.
 		 nil t)
 	    ;; We do have a matching #+end line.
@@ -5463,7 +5473,7 @@ by a #."
 	    (beginning-of-line)
 	    (looking-at (rx (group (zero-or-more (any " \t"))
 				   "#+caption"
-				   (optional "[" (zero-or-more any) "]")
+				   (optional "[" (zero-or-more nonl) "]")
 				   ":")
 			    (zero-or-more (any " \t")))))
 	  (add-text-properties (line-beginning-position) (match-end 1)
@@ -5681,7 +5691,7 @@ highlighting was done, nil otherwise."
 
 If this is called at a normal headline, the level is the number
 of stars.  Use `org-reduced-level' to remove the effect of
-`org-odd-levels'.  Unlike to `org-current-level', this function
+`org-odd-levels-only'.  Unlike `org-current-level', this function
 takes into consideration inlinetasks."
   (org-with-wide-buffer
    (end-of-line)
@@ -5883,6 +5893,8 @@ needs to be inserted at a specific position in the font-lock sequence.")
 
 (defvar-local org-custom-properties-overlays nil
   "List of overlays used for custom properties.")
+;; Preserve when switching modes or when restarting Org.
+(put 'org-custom-properties-overlays 'permanent-local t)
 
 (defun org-toggle-custom-properties-visibility ()
   "Display or hide properties in `org-custom-properties'."
@@ -6311,7 +6323,10 @@ unconditionally."
        (if (not level) (outline-next-heading) ;before first headline
 	 (org-back-to-heading invisible-ok)
 	 (when (equal arg '(16)) (org-up-heading-safe))
-	 (org-end-of-subtree)))
+	 (org-end-of-subtree invisible-ok 'to-heading)))
+      ;; At `point-max', if the file does not have ending newline,
+      ;; create one, so that we are not appending stars at non-empty
+      ;; line.
       (unless (bolp) (insert "\n"))
       (when (and blank? (save-excursion
                           (backward-char)
@@ -6323,7 +6338,9 @@ unconditionally."
         (backward-char))
       (unless (and blank? (org-previous-line-empty-p))
 	(org-N-empty-lines-before-current (if blank? 1 0)))
-      (insert stars " ")
+      (insert stars " " "\n")
+      ;; Move point after stars.
+      (backward-char)
       ;; When INVISIBLE-OK is non-nil, ensure newly created headline
       ;; is visible.
       (unless invisible-ok
@@ -6611,7 +6628,7 @@ headings in the region."
   "Return the level of the current entry, or nil if before the first headline.
 The level is the number of stars at the beginning of the
 headline.  Use `org-reduced-level' to remove the effect of
-`org-odd-levels'.  Unlike to `org-outline-level', this function
+`org-odd-levels-only'.  Unlike `org-outline-level', this function
 ignores inlinetasks."
   (let ((level (org-with-limited-levels (org-outline-level))))
     (and (> level 0) level)))
@@ -8434,7 +8451,10 @@ a link."
 	       (dolist (link (if (stringp links) (list links) links))
 		 (search-forward link nil links-end)
 		 (goto-char (match-beginning 0))
-		 (org-open-at-point arg)))))))
+                 ;; When opening file link, current buffer may be
+                 ;; altered.
+                 (save-current-buffer
+		   (org-open-at-point arg))))))))
        ;; On a footnote reference or at definition's label.
        ((or (eq type 'footnote-reference)
 	    (and (eq type 'footnote-definition)
@@ -9137,7 +9157,8 @@ nil or a string to be used for the todo mark." )
 	(replace-match "0" t nil nil 1)))))
 
 (defvar org-state)
-(defvar org-blocked-by-checkboxes)
+;; FIXME: We should refactor this and similar dynamically scoped blocker flags.
+(defvar org-blocked-by-checkboxes nil) ; dynamically scoped
 (defun org-todo (&optional arg)
   "Change the TODO state of an item.
 
@@ -9695,7 +9716,7 @@ when there is a statistics cookie in the headline!
 
  (defun org-summary-todo (n-done n-not-done)
    \"Switch entry to DONE when all subentries are done, to TODO otherwise.\"
-   (let (org-log-done org-log-states)   ; turn off logging
+   (let (org-log-done org-todo-log-states)   ; turn off logging
      (org-todo (if (= n-not-done 0) \"DONE\" \"TODO\"))))")
 
 (defvar org-todo-statistics-hook nil
@@ -10209,7 +10230,7 @@ nil."
 	(replace-match "")
         (if (and (string-match "\\S-" (buffer-substring (line-beginning-position) (point)))
 		 (equal (char-before) ?\ ))
-	    (backward-delete-char 1)
+	    (delete-char -1)
 	  (when (string-match "^[ \t]*$" (buffer-substring
                                           (line-beginning-position) (line-end-position)))
             (delete-region (line-beginning-position)
@@ -10659,6 +10680,7 @@ D      Show deadlines and scheduled items between a date range."
 
 (defvar-local org-occur-highlights nil
   "List of overlays used for occur matches.")
+(put 'org-occur-highlights 'permanent-local t)
 (defvar-local org-occur-parameters nil
   "Parameters of the active org-occur calls.
 This is a list, each call to org-occur pushes as cons cell,
@@ -11324,7 +11346,7 @@ See also `org-scan-tags'."
   (let ((match0 match)
 	(re (concat
 	     "^&?\\([-+:]\\)?\\({[^}]+}\\|LEVEL\\([<=>]\\{1,2\\}\\)"
-	     "\\([0-9]+\\)\\|\\(\\(?:[[:alnum:]_]+\\(?:\\\\-\\)*\\)+\\)"
+	     "\\([0-9]+\\)\\|\\([[:alnum:]_]\\(?:[[:alnum:]_]\\|\\\\-\\)*\\)"
 	     "\\([<>=]\\{1,2\\}\\)"
 	     "\\({[^}]+}\\|\"[^\"]*\"\\|-?[.0-9]+\\(?:[eE][-+]?[0-9]+\\)?\\)"
 	     "\\|" org-tag-re "\\)"))
@@ -12000,18 +12022,17 @@ Returns the new tags string, or nil to not change the current settings."
 		    (setq current nil)
 		    (when exit-after-next (setq exit-after-next 'now)))
 		   ((= c ?\t)
-                    (condition-case nil
-                        (unless tab-tags
-                          (setq tab-tags
-                                (delq nil
-                                      (mapcar (lambda (x)
-                                                (let ((item (car-safe x)))
-                                                  (and (stringp item)
-                                                       (list item))))
-                                              (org--tag-add-to-alist
-                                               (with-current-buffer buf
-                                                 (org-get-buffer-tags))
-                                               table))))))
+                    (unless tab-tags
+                      (setq tab-tags
+                            (delq nil
+                                  (mapcar (lambda (x)
+                                            (let ((item (car-safe x)))
+                                              (and (stringp item)
+                                                   (list item))))
+                                          (org--tag-add-to-alist
+                                           (with-current-buffer buf
+                                             (org-get-buffer-tags))
+                                           table)))))
                     (setq tg (completing-read "Tag: " tab-tags))
 		    (when (string-match "\\S-" tg)
 		      (cl-pushnew (list tg) tab-tags :test #'equal)
@@ -13207,7 +13228,7 @@ Optional argument DEFAULT provides a default value for PROPERTY."
      nil nil nil nil default-prop)))
 
 (defun org-set-property-and-value (use-last)
-  "Allow to set [PROPERTY]: [value] direction from prompt.
+  "Allow setting [PROPERTY]: [value] direction from prompt.
 When use-default, don't even ask, just use the last
 \"[PROPERTY]: [value]\" string from the history."
   (interactive "P")
@@ -14014,6 +14035,7 @@ user."
       (unless deltadef
 	(let ((now (decode-time)))
 	  (setq day (nth 3 now) month (nth 4 now) year (nth 5 now))))
+      ;; FIXME: Duplicated value in ‘cond’: ""
       (cond ((member deltaw '("h" ""))
              (when (boundp 'org-time-was-given)
                (setq org-time-was-given t))
@@ -14738,12 +14760,12 @@ is considered `day' (i.e. only `bracket', `day', and `after' return
 values are possible).
 
 When matching, the match groups are the following:
-  group 1: year, if any
-  group 2: month, if any
-  group 3: day number, if any
-  group 4: day name, if any
-  group 5: hours, if any
-  group 6: minutes, if any"
+  group 2: year, if any
+  group 3: month, if any
+  group 4: day number, if any
+  group 5: day name, if any
+  group 7: hours, if any
+  group 8: minutes, if any"
   (let* ((regexp
           (if extended
               (if (eq extended 'agenda)
@@ -16146,6 +16168,10 @@ SNIPPETS-P indicates if this is run to create snippet images for HTML."
 ;; Image display
 
 (defvar-local org-inline-image-overlays nil)
+;; Preserve when switching modes or when restarting Org.
+;; If we clear the overlay list and later enable Or mode, the existing
+;; image overlays will never be cleared by `org-toggle-inline-images'.
+(put 'org-inline-image-overlays 'permanent-local t)
 
 (defun org--inline-image-overlays (&optional beg end)
   "Return image overlays between BEG and END."
@@ -16240,7 +16266,8 @@ conventions:
 
   2. Its description consists in a single link of the previous
      type.  In this case, that link must be a well-formed plain
-     or angle link, i.e., it must have an explicit \"file\" type.
+     or angle link, i.e., it must have an explicit \"file\" or
+     \"attachment\" type.
 
 Equip each image with the key-map `image-map'.
 
@@ -16271,7 +16298,7 @@ buffer boundaries with possible narrowing."
 	       ;; "file:" links.  Also check link abbreviations since
 	       ;; some might expand to "file" links.
 	       (file-types-re
-		(format "\\[\\[\\(?:file%s:\\|attachment:\\|[./~]\\)\\|\\]\\[\\(<?file:\\)"
+		(format "\\[\\[\\(?:file%s:\\|attachment:\\|[./~]\\)\\|\\]\\[\\(<?\\(?:file\\|attachment\\):\\)"
 			(if (not link-abbrevs) ""
 			  (concat "\\|" (regexp-opt link-abbrevs))))))
 	  (while (re-search-forward file-types-re end t)
@@ -16310,7 +16337,9 @@ buffer boundaries with possible narrowing."
 			     ;; description.
 			     (= (org-element-property :contents-end link)
 				(match-end 0))
-			     (match-string 2)))))))
+			     (progn
+                               (setq linktype (match-string 1))
+                               (match-string 2))))))))
 	      (when (and path (string-match-p file-extension-re path))
 		(let ((file (if (equal "attachment" linktype)
 				(progn
@@ -16409,7 +16438,7 @@ buffer boundaries with possible narrowing."
 (defun org-display-inline-remove-overlay (ov after _beg _end &optional _len)
   "Remove inline-display overlay if a corresponding region is modified."
   (when (and ov after)
-    (delete ov org-inline-image-overlays)
+    (setq org-inline-image-overlays (delete ov org-inline-image-overlays))
     ;; Clear image from cache to avoid image not updating upon
     ;; changing on disk.  See Emacs bug#59902.
     (when (overlay-get ov 'org-image-overlay)
@@ -16526,7 +16555,7 @@ because, in this case the deletion might narrow the column."
 	     (looking-at-p ".*?|")
 	     (org-at-table-p))
 	(progn (forward-char -1) (org-delete-char 1))
-      (backward-delete-char N)
+      (funcall-interactively #'backward-delete-char N)
       (org-fix-tags-on-the-fly))))
 
 (defun org-delete-char (N)
@@ -17627,8 +17656,8 @@ region."
 (defun org-open-line (n)
   "Insert a new row in tables, call `open-line' elsewhere.
 If `org-special-ctrl-o' is nil, just call `open-line' everywhere.
-As a special case, when a document starts with a table, allow to
-call `open-line' on the very first character."
+As a special case, when a document starts with a table, allow
+calling `open-line' on the very first character."
   (interactive "*p")
   (if (and org-special-ctrl-o (/= (point) 1) (org-at-table-p))
       (org-table-insert-row)
@@ -17640,6 +17669,8 @@ If INDENT is non-nil, call `newline-and-indent' with ARG to
 indent unconditionally; otherwise, call `newline' with ARG and
 INTERACTIVE, which can trigger indentation if
 `electric-indent-mode' is enabled."
+  (when interactive
+    (org-fold-check-before-invisible-edit 'insert))
   (if indent
       (org-newline-and-indent arg)
     (newline arg interactive)))
@@ -18589,6 +18620,10 @@ block from point."
 	      (throw 'exit n)))))
       nil)))
 
+;; Defined in org-agenda.el
+(defvar org-agenda-restrict)
+(defvar org-agenda-restrict-begin)
+(defvar org-agenda-restrict-end)
 (defun org-occur-in-agenda-files (regexp &optional _nlines)
   "Call `multi-occur' with buffers for all agenda files."
   (interactive "sOrg-files matching: ")
@@ -18838,9 +18873,7 @@ ELEMENT."
 	     (goto-char start)
 	     (current-indentation)))
 	  ;; In any other case, indent like the current line.
-	  (t (current-indentation)))))
-      ;; Finally, no indentation is needed, fall back to 0.
-      (t (current-indentation))))))
+	  (t (current-indentation)))))))))
 
 (defun org--align-node-property ()
   "Align node property at point.
@@ -19952,7 +19985,7 @@ With argument N not nil or 1, move forward N - 1 lines first."
 	(if (eq special 'reversed)
 	    (when (and (= origin bol) (eq last-command this-command))
 	      (goto-char refpos))
-	  (when (or (> origin refpos) (= origin bol))
+	  (when (or (> origin refpos) (<= origin bol))
 	    (goto-char refpos)))))
      ((and (looking-at org-list-full-item-re)
 	   (memq (org-element-type (save-match-data (org-element-at-point)))
@@ -19967,7 +20000,7 @@ With argument N not nil or 1, move forward N - 1 lines first."
 	(if (eq special 'reversed)
 	    (when (and (= (point) origin) (eq last-command this-command))
 	      (goto-char after-bullet))
-	  (when (or (> origin after-bullet) (= (point) origin))
+	  (when (or (> origin after-bullet) (>= (point) origin))
 	    (goto-char after-bullet)))))
      ;; No special context.  Point is already at beginning of line.
      (t nil))))
@@ -20022,7 +20055,7 @@ With argument N not nil or 1, move forward N - 1 lines first."
 		   (goto-char tags)
 		 (end-of-line)))
 	      (t
-	       (if (or (< origin tags) (= origin (line-end-position)))
+	       (if (or (< origin tags) (>= origin (line-end-position)))
 		   (goto-char tags)
 		 (end-of-line))))))
      ((bound-and-true-p visual-line-mode)
@@ -20639,7 +20672,7 @@ non-nil it will also look at invisible ones."
 	(if backward? (goto-char (point-min)) (outline-next-heading))
       (org-back-to-heading invisible-ok)
       (unless backward? (end-of-line))	;do not match current headline
-      (let ((level (- (match-end 0) (match-beginning 0) 1))
+      (let ((level (org-current-level))
 	    (f (if backward? #'re-search-backward #'re-search-forward))
 	    (count (if arg (abs arg) 1))
 	    (result (point)))

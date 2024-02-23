@@ -1,6 +1,6 @@
 ;;; imenu.el --- framework for mode-specific buffer indexes  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1994-1998, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1994-1998, 2001-2024 Free Software Foundation, Inc.
 
 ;; Author: Ake Stenhoff <etxaksf@aom.ericsson.se>
 ;;         Lars Lindberg <lli@sypro.cap.se>
@@ -674,8 +674,8 @@ depending on PATTERNS."
 			    (cons item (cdr menu)))))
 		;; Go to the start of the match, to make sure we
 		;; keep making progress backwards.
-		(goto-char start))))
-	  (set-syntax-table old-table)))
+		(goto-char start)))))
+      (set-syntax-table old-table))
     ;; Sort each submenu by position.
     ;; This is in case one submenu gets items from two different regexps.
     (dolist (item index-alist)

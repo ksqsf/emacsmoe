@@ -1,6 +1,6 @@
 ;;; calc-misc.el --- miscellaneous functions for Calc  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1990-1993, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1990-1993, 2001-2024 Free Software Foundation, Inc.
 
 ;; Author: David Gillespie <daveg@synaptics.com>
 
@@ -195,7 +195,6 @@ Calc user interface as before (either \\`C-x * C' or \\`C-x * K'; initially \\`C
 ;;;###autoload
 (defun calc-info-goto-node (node)
   "Go to a node in the Calculator info documentation."
-  (interactive)
   (select-window (get-largest-window))
   (info (concat "(Calc)" node)))
 

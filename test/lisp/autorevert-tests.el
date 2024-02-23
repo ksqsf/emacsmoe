@@ -1,6 +1,6 @@
 ;;; autorevert-tests.el --- Tests of auto-revert   -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 
@@ -257,7 +257,7 @@ This expects `auto-revert--messages' to be bound by
   ;; Repeated unpredictable failures, bug#32645.
   :tags '(:unstable)
   ;; Unlikely to be hydra-specific?
-  ;; (skip-unless (not (getenv "EMACS_HYDRA_CI")))
+  ;; (skip-when (getenv "EMACS_HYDRA_CI"))
   (with-auto-revert-test
    (ert-with-temp-file tmpfile
      (let (;; Try to catch bug#32645.

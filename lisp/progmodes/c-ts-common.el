@@ -1,8 +1,9 @@
 ;;; c-ts-common.el --- Utilities for C like Languages  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2023 Free Software Foundation, Inc.
+;; Copyright (C) 2023-2024 Free Software Foundation, Inc.
 
 ;; Maintainer : 付禹安 (Yuan Fu) <casouri@gmail.com>
+;; Package    : emacs
 ;; Keywords   : c c++ java javascript rust languages tree-sitter
 
 ;; This file is part of GNU Emacs.
@@ -36,9 +37,8 @@
 ;;
 ;; For indenting statements:
 ;;
-;; - Set `c-ts-common-indent-offset',
-;;   `c-ts-common-indent-block-type-regexp', and
-;;   `c-ts-common-indent-bracketless-type-regexp', then use simple-indent
+;; - Set `c-ts-common-indent-offset', and
+;;   `c-ts-common-indent-type-regexp-alist', then use simple-indent
 ;;   offset `c-ts-common-statement-offset' in
 ;;   `treesit-simple-indent-rules'.
 
@@ -115,7 +115,7 @@ non-whitespace characters of the current line."
   "Regexp pattern that matches a comment in C-like languages.")
 
 (defun c-ts-common--fill-paragraph (&optional arg)
-  "Fillling function for `c-ts-common'.
+  "Filling function for `c-ts-common'.
 ARG is passed to `fill-paragraph'."
   (interactive "*P")
   (save-restriction
@@ -133,7 +133,7 @@ ARG is passed to `fill-paragraph'."
       t)))
 
 (defun c-ts-common--fill-block-comment (&optional arg)
-  "Fillling function for block comments.
+  "Filling function for block comments.
 ARG is passed to `fill-paragraph'.  Assume point is in a block
 comment."
   (let* ((node (treesit-node-at (point)))
@@ -156,10 +156,12 @@ comment."
         (goto-char (match-beginning 1))
         (move-marker start-marker (point))
         (replace-match " " nil nil nil 1))
+
       ;; Include whitespaces before /*.
       (goto-char start)
       (beginning-of-line)
       (setq start (point))
+
       ;; Mask spaces before "*/" if it is attached at the end
       ;; of a sentence rather than on its own line.
       (goto-char end)
@@ -172,6 +174,7 @@ comment."
         (setq end-len (- (match-end 1) (match-beginning 1)))
         (replace-match (make-string end-len ?x)
                        nil nil nil 1))
+
       ;; If "*/" is on its own line, don't included it in the
       ;; filling region.
       (when (not end-marker)
@@ -180,13 +183,21 @@ comment."
           (backward-char 2)
           (skip-syntax-backward "-")
           (setq end (point))))
+
       ;; Let `fill-paragraph' do its thing.
       (goto-char orig-point)
       (narrow-to-region start end)
-      ;; We don't want to fill the region between START and
-      ;; START-MARKER, otherwise the filling function might delete
-      ;; some spaces there.
-      (fill-region start-marker end arg)
+      (let (para-start para-end)
+        (forward-paragraph 1)
+        (setq para-end (point))
+        (forward-paragraph -1)
+        (setq para-start (point))
+        ;; We don't want to fill the region between START and
+        ;; START-MARKER, otherwise the filling function might delete
+        ;; some spaces there.  Also, we only fill the current
+        ;; paragraph.
+        (fill-region (max start-marker para-start) (min end para-end) arg))
+
       ;; Unmask.
       (when start-marker
         (goto-char start-marker)
@@ -319,7 +330,7 @@ If NODE is nil, return nil."
 Assumes the anchor is (point-min), i.e., the 0th column.
 
 This function basically counts the number of block nodes (i.e.,
-brackets) (defined by `c-ts-common-indent-block-type-regexp')
+brackets) (see `c-ts-common-indent-type-regexp-alist')
 between NODE and the root node (not counting NODE itself), and
 multiply that by `c-ts-common-indent-offset'.
 

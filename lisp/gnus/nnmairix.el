@@ -1,6 +1,6 @@
 ;;; nnmairix.el --- Mairix back end for Gnus, the Emacs newsreader  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2007-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2024 Free Software Foundation, Inc.
 
 ;; Author: David Engster <deng@randomsample.de>
 ;; Keywords: mail searching
@@ -741,8 +741,7 @@ called interactively, user will be asked for parameters."
   (when (and (stringp query)
 	     (string-match "\\s-" query))
     (setq query (split-string query)))
-  (when (not (listp query))
-    (setq query (list query)))
+  (setq query (ensure-list query))
   (when (and server group query)
     (let ((groupname (gnus-group-prefixed-name group server))
           ) ;; info

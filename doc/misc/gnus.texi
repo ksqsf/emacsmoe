@@ -8,7 +8,7 @@
 @syncodeindex pg cp
 
 @copying
-Copyright @copyright{} 1995--2023 Free Software Foundation, Inc.
+Copyright @copyright{} 1995--2024 Free Software Foundation, Inc.
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document
@@ -713,7 +713,6 @@ Choosing a Mail Back End
 
 Browsing the Web
 
-* Archiving Mail::
 * Web Searches::                Creating groups from articles that match a string.
 * RSS::                         Reading RDF site summary.
 
@@ -3217,7 +3216,7 @@ if address "sender" "sieve-admin@@extundo.com" @{
 @end example
 
 To generate tests for multiple email-addresses use a group parameter
-like @code{(sieve address "sender" ("name@@one.org" else@@two.org"))}.
+like @code{(sieve address "sender" ("name@@one.org" "else@@two.org"))}.
 When generating a sieve script (@pxref{Sieve Commands}) Sieve code
 like the following is generated:
 
@@ -3373,7 +3372,7 @@ You can define different sorting to different groups via
 group by reverse date to see the latest news at the top and an
 @acronym{RSS} group by subject.  In this example, the first group is the
 Debian daily news group @code{gmane.linux.debian.user.news} from
-news.gmane.org.  The @acronym{RSS} group corresponds to the Debian
+news.gmane.io.  The @acronym{RSS} group corresponds to the Debian
 weekly news RSS feed
 @url{https://packages.debian.org/unstable/newpkg_main.en.rdf},
 @xref{RSS}.
@@ -4427,7 +4426,7 @@ A select method can be very long, like:
 
 @lisp
 (nntp "gmane"
-      (nntp-address "news.gmane.org")
+      (nntp-address "news.gmane.io")
       (nntp-end-of-line "\n")
       (nntp-open-connection-function
        nntp-open-via-rlogin-and-telnet)
@@ -5015,14 +5014,14 @@ the @code{a} spec.
 @item L
 Number of lines in the article.
 @item Z
-Retrieval Score Value (RSV) of the article; nil if not in an nnselect
-group.
+Retrieval Score Value (RSV) of the article; @code{nil} if not in an
+nnselect group.
 @item G
-Originating group name of the article; nil if not in an nnselect
-group.
+Originating group name of the article; @code{nil} if not in an
+nnselect group.
 @item g
-Short form of the originating group name of the article; nil if not in
-an nnselect group.
+Short form of the originating group name of the article; @code{nil} if
+not in an nnselect group.
 @item c
 Number of characters in the article.  This specifier is not supported
 in some methods (like nnfolder).
@@ -5833,10 +5832,11 @@ message to the mailing list, and include the original message
 @kindex S v @r{(Summary)}
 @findex gnus-summary-very-wide-reply
 Mail a very wide reply to the author of the current article
-(@code{gnus-summary-wide-reply}).  A @dfn{very wide reply} is a reply
-that goes out to all people listed in the @code{To}, @code{From} (or
-@code{Reply-To}) and @code{Cc} headers in all the process/prefixed
-articles.  This command uses the process/prefix convention.
+(@code{gnus-summary-very-wide-reply}).  A @dfn{very wide reply} is a
+reply that goes out to all people listed in the @code{To}, @code{From}
+(or @code{Reply-To}) and @code{Cc} headers in all the process/prefixed
+articles. This command uses the process/prefix convention.  If given a
+prefix argument, the body of the current article will also be yanked.
 
 @item S V
 @kindex S V @r{(Summary)}
@@ -5869,15 +5869,23 @@ original message but ignore the @code{Reply-To} field
 @findex gnus-summary-mail-forward
 @c @icon{gnus-summary-mail-forward}
 Forward the current article to some other person
-(@code{gnus-summary-mail-forward}).  If no prefix is given, the message
-is forwarded according to the value of (@code{message-forward-as-mime})
-and (@code{message-forward-show-mml}); if the prefix is 1, decode the
-message and forward directly inline; if the prefix is 2, forward message
-as an rfc822 @acronym{MIME} section; if the prefix is 3, decode message and
-forward as an rfc822 @acronym{MIME} section; if the prefix is 4, forward message
-directly inline; otherwise, the message is forwarded as no prefix given
-but use the flipped value of (@code{message-forward-as-mime}).  By
-default, the forwarded message is inlined into the mail.
+(@code{gnus-summary-mail-forward}).  If no prefix is given, the
+message is forwarded according to the value of
+(@code{message-forward-as-mime}) and
+(@code{message-forward-show-mml}); if the prefix is 1, decode the
+message and forward directly inline; if the prefix is 2, forward
+message as an rfc822 @acronym{MIME} section; if the prefix is 3,
+decode message and forward as an rfc822 @acronym{MIME} section; if the
+prefix is 4, forward message directly inline; otherwise, the message
+is forwarded as no prefix given but use the negated value of
+(@code{message-forward-as-mime}).  By default, the forwarded message
+is inlined into the mail.
+
+Which headers from the original message are included in the forwarded
+message is determined by options specific to @code{message-mode},
+@pxref{Forwarding,,, message}.  In addition, this command can be given
+the symbolic prefix @samp{a}, using @kbd{M-i a}, to include most original
+headers.
 
 @item S m
 @itemx m
@@ -6235,13 +6243,6 @@ For example, @code{(gnus-delay-initialize nil t)} means to do nothing.
 Presumably, you want to use the demon for sending due delayed articles.
 Just don't forget to set that up :-)
 @end table
-
-When delaying an article with @kbd{C-c C-j}, Message mode will
-automatically add a @code{"Date"} header with the current time.  In
-many cases you probably want the @code{"Date"} header to reflect the
-time the message is sent instead.  To do this, you have to delete
-@code{Date} from @code{message-draft-headers}.
-
 
 @node Marking Articles
 @section Marking Articles
@@ -7280,7 +7281,7 @@ The server has to support @acronym{NOV} for any of this to work.
 @cindex Gmane, @code{gnus-fetch-old-headers}
 This feature can seriously impact performance it ignores all locally
 cached header entries.  Setting it to @code{t} for groups for a server
-that doesn't expire articles (such as news.gmane.org), leads to very
+that doesn't expire articles (such as news.gmane.io), leads to very
 slow summary generation.
 
 @item gnus-fetch-old-ephemeral-headers
@@ -10528,9 +10529,9 @@ article (@code{gnus-summary-refer-references}).
 @kindex A T @r{(Summary)}
 Display the full thread where the current article appears
 (@code{gnus-summary-refer-thread}).  By default this command looks for
-articles only in the current group.  Some backends (currently only
-@code{nnimap}) know how to find articles in the thread directly.  In
-other cases each header in the current group must be fetched and
+articles only in the current group.  If the group belongs to a backend
+that has an associated search engine, articles are found by searching.
+In other cases each header in the current group must be fetched and
 examined, so it usually takes a while.  If you do it often, you may
 consider setting @code{gnus-fetch-old-headers} to @code{invisible}
 (@pxref{Filling In Threads}).  This won't have any visible effects
@@ -10538,19 +10539,22 @@ normally, but it'll make this command work a whole lot faster.  Of
 course, it'll make group entry somewhat slow.
 
 @vindex gnus-refer-thread-use-search
-If @code{gnus-refer-thread-use-search} is non-@code{nil} then those backends
-that know how to find threads directly will search not just in the
-current group but all groups on the same server.
+If @code{gnus-refer-thread-use-search} is @code{nil} (the default)
+then thread-referral only looks for articles in the current group. If
+this variable is @code{t} the server to which the current group
+belongs is searched (provided that searching is available for the
+server's backend).  If this variable is a list of servers, each server
+in the list is searched.
 
 @vindex gnus-refer-thread-limit
 The @code{gnus-refer-thread-limit} variable says how many old (i.e.,
 articles before the first displayed in the current group) headers to
-fetch when doing this command.  The default is 200.  If @code{t}, all
-the available headers will be fetched.  This variable can be overridden
-by giving the @kbd{A T} command a numerical prefix.
+fetch when referring a thread.  The default is 500.  If @code{t}, all
+the available headers will be fetched.  This variable can be
+overridden by giving the @kbd{A T} command a numerical prefix.
 
 @vindex gnus-refer-thread-limit-to-thread
-In most cases @code{gnus-refer-thread} adds any articles it finds to
+@code{gnus-summary-refer-thread} tries to add any articles it finds to
 the current summary buffer.  (When @code{gnus-refer-thread-use-search}
 is true and the initial referral starts from a summary buffer for a
 non-virtual group this may not be possible.  In this case a new
@@ -14569,18 +14573,20 @@ requires using the @file{oauth2.el} library.)
 @vindex nnimap-expunge
 @item nnimap-expunge
 When to expunge deleted messages.  If @code{never}, deleted articles
-are marked with the IMAP @code{\\Delete} flag but not automatically
-expunged. If @code{immediately}, deleted articles are immediately expunged
-(this requires the server to support the UID EXPUNGE command). If
-@code{on-exit}, deleted articles are flagged, and all flagged articles are
-expunged when the group is closed.
+are marked with the @acronym{IMAP} @code{\\Delete} flag but not
+automatically expunged.  If @code{immediately}, deleted articles are
+immediately expunged (this requires the server to support the
+@code{UID EXPUNGE} command).  If @code{on-exit}, deleted articles are
+flagged, and all flagged articles are expunged when the group is
+closed.
 
-For backwards compatibility, this variable may also be set to t
-or nil. If the server supports UID EXPUNGE, both t and nil are
-equivalent to @code{immediately}. If the server does not support UID
-EXPUNGE nil is equivalent to @code{never}, while t will immediately
-expunge ALL articles that are currently flagged as deleted
-(i.e., potentially not only the article that was just deleted).
+For backwards compatibility, this variable may also be set to @code{t}
+or @code{nil}.  If the server supports @code{UID EXPUNGE}, both
+@code{t} and @code{nil} are equivalent to @code{immediately}.  If the
+server does not support @code{UID EXPUNGE}, @code{nil} is equivalent
+to @code{never}, while @code{t} will immediately expunge @emph{all}
+articles that are currently flagged as deleted (i.e., potentially not
+only the article that was just deleted).
 
 @vindex nnimap-streaming
 @item nnimap-streaming
@@ -15297,9 +15303,9 @@ Two example maildir mail sources:
 @end lisp
 
 @item imap
-Get mail from a @acronym{IMAP} server.  If you don't want to use
+Get mail from an @acronym{IMAP} server.  If you don't want to use
 @acronym{IMAP} as intended, as a network mail reading protocol (i.e.,
-with nnimap), for some reason or other, Gnus let you treat it similar
+with nnimap), for some reason or other, Gnus lets you treat it similar
 to a @acronym{POP} server and fetches articles from a given
 @acronym{IMAP} mailbox.  @xref{Using IMAP}, for more information.
 
@@ -17244,7 +17250,6 @@ Gnus has been getting a bit of a collection of back ends for providing
 interfaces to these sources.
 
 @menu
-* Archiving Mail::
 * Web Searches::                Creating groups from articles that match a string.
 * RSS::                         Reading RDF site summary.
 @end menu
@@ -17260,29 +17265,6 @@ are often down, unavailable or just plain too slow to be fun.  In those
 cases, it makes a lot of sense to let the Gnus Agent (@pxref{Gnus
 Unplugged}) handle downloading articles, and then you can read them at
 leisure from your local disk.  No more World Wide Wait for you.
-
-@node Archiving Mail
-@subsection Archiving Mail
-@cindex archiving mail
-@cindex backup of mail
-
-Some of the back ends, notably @code{nnml}, @code{nnfolder}, and
-@code{nnmaildir}, now actually store the article marks with each group.
-For these servers, archiving and restoring a group while preserving
-marks is fairly simple.
-
-(Preserving the group level and group parameters as well still
-requires ritual dancing and sacrifices to the @file{.newsrc.eld} deity
-though.)
-
-To archive an entire @code{nnml}, @code{nnfolder}, or @code{nnmaildir}
-server, take a recursive copy of the server directory.  There is no need
-to shut down Gnus, so archiving may be invoked by @code{cron} or
-similar.  You restore the data by restoring the directory tree, and
-adding a server definition pointing to that directory in Gnus.  The
-@ref{Article Backlog}, @ref{Asynchronous Fetching} and other things
-might interfere with overwriting data, so you may want to shut down Gnus
-before you restore the data.
 
 @node Web Searches
 @subsection Web Searches
@@ -18040,7 +18022,7 @@ Here is an example:
  (nnselect-args
   . [["nnimap+work:mail" 595 100]
      ["nnimap+home:sent" 223 100]
-     ["nntp+news.gmane.org:gmane.emacs.gnus.general" 23666 100]]))
+     ["nntp+news.gmane.io:gmane.emacs.gnus.general" 23666 100]]))
 @end lisp
 
 The function is the identity and the argument is just the list of
@@ -19429,7 +19411,7 @@ If you so desire, you can configure the agent (see @code{gnus-agent-cache}
 @pxref{Agent Variables}) to always download headers and articles while
 plugged.  Gnus will almost certainly be slower, but it will be kept
 synchronized with the server.  That last point probably won't make any
-sense if you are using a nntp or nnimap back end.
+sense if you are using an nntp or nnimap back end.
 
 @node Agent Expiry
 @subsection Agent Expiry
@@ -19825,7 +19807,7 @@ locally stored articles.
 @chapter Scoring
 @cindex scoring
 
-Other people use @dfn{kill files} (@pxref{Kill Files}, but we here at
+Other people use @dfn{kill files} (@pxref{Kill Files}), but we here at
 Gnus Towers like scoring better than killing, so we'd rather switch
 than fight.  Scoring and score files processing are more powerful and
 faster than processing of kill files.  Scoring also does something
@@ -21616,7 +21598,7 @@ Search Groups}).
 Search queries can be specified one of two ways: either using the
 syntax of the engine responsible for the group you're searching, or
 using Gnus' generalized search syntax.  Set the option
-@code{gnus-search-use-parsed-queries} to a non-@code{nil} value to used the
+@code{gnus-search-use-parsed-queries} to a non-@code{nil} value to use the
 generalized syntax.  The advantage of this syntax is that, if you have
 multiple backends indexed by different engines, you don't need to
 remember which one you're searching---it's also possible to issue the
@@ -24546,8 +24528,8 @@ that is needed.  It can also contain @samp{(@var{addr} @var{string}
 @var{amount})} cells, where the @var{string} is the string to use
 (normally the email address or newsgroup name is used).
 
-@item hashcash-path
-@vindex hashcash-path
+@item hashcash-program
+@vindex hashcash-program
 Where the @code{hashcash} binary is installed.  This variable should
 be automatically set by @code{executable-find}, but if it's @code{nil}
 (usually because the @code{hashcash} binary is not in your path)
@@ -24861,7 +24843,7 @@ ends such as Bogofilter (@pxref{Bogofilter}) and the Spam Statistics
 package (@pxref{Spam Statistics Filtering}).
 
 The spam and ham processors that apply to each group are determined by
-the group's@code{spam-process} group parameter.  If this group
+the group's @code{spam-process} group parameter.  If this group
 parameter is not defined, they are determined by the variable
 @code{gnus-spam-process-newsgroups}.
 
@@ -25175,9 +25157,9 @@ groups as spam and reports the to Gmane at group exit:
 @end lisp
 
 Additionally, I use @code{(setq spam-report-gmane-use-article-number nil)}
-because I don't read the groups directly from news.gmane.org, but
+because I don't read the groups directly from news.gmane.io, but
 through my local news server (leafnode).  I.e., the article numbers are
-not the same as on news.gmane.org, thus @code{spam-report.el} has to check
+not the same as on news.gmane.io, thus @code{spam-report.el} has to check
 the @code{X-Report-Spam} header to find the correct number.
 
 @node Spam Back Ends
@@ -25361,7 +25343,7 @@ added to a group's @code{spam-process} parameter, the spam-marked
 articles groups will be reported to the Gmane administrators via a
 HTTP request.
 
-Gmane was formerly found at @uref{http://gmane.org}.
+Gmane is at @uref{https://gmane.io}.
 
 @emph{WARNING}
 
@@ -25496,7 +25478,7 @@ There is no specific spam or ham processor for regular expressions.
 
 @defvar spam-use-bogofilter
 
-Set this variable if you want @code{spam-split} to use Eric Raymond's
+Set this variable if you want @code{spam-split} to use Eric S. Raymond's
 speedy Bogofilter.
 
 With a minimum of care for associating the @samp{$} mark for spam
@@ -25528,7 +25510,7 @@ Get the Bogofilter spamicity score (@code{spam-bogofilter-score}).
 
 @defvar spam-use-bogofilter-headers
 
-Set this variable if you want @code{spam-split} to use Eric Raymond's
+Set this variable if you want @code{spam-split} to use Eric S. Raymond's
 speedy Bogofilter, looking only at the message headers.  It works
 similarly to @code{spam-use-bogofilter}, but the @code{X-Bogosity} header
 must be in the message already.  Normally you would do this with a
@@ -26394,7 +26376,7 @@ If this option is non-@code{nil}, the registry will register all messages, as
 you see them.  This is important to making split-to-parent and
 Message-ID references work correctly, as the registry needs to know
 where all messages are, but it can slow down group opening and the
-saving of Gnus.  If this option is nil, entries must be created
+saving of Gnus.  If this option is @code{nil}, entries must be created
 manually, for instance by storing a custom flag or keyword for the
 message.
 @end defvar
@@ -26416,8 +26398,8 @@ This option specifies how registry entries are sorted during pruning.
 If a function is given, it should sort least valuable entries first,
 as pruning starts from the beginning of the list.  The default value
 is @code{gnus-registry-sort-by-creation-time}, which proposes the
-oldest entries for pruning.  Set to nil to perform no sorting, which
-will speed up the pruning process.
+oldest entries for pruning.  Set to @code{nil} to perform no sorting,
+which will speed up the pruning process.
 @end defvar
 
 @defvar gnus-registry-cache-file
@@ -26454,12 +26436,12 @@ lines:
 (setq gnus-refer-article-method
       '(current
         (nnregistry)
-        (nnweb "gmane" (nnweb-type gmane))))
+        (nnweb "google" (nnweb-type google))))
 @end example
 
 The example above instructs Gnus to first look up the article in the
 current group, or, alternatively, using the registry, and finally, if
-all else fails, using Gmane.
+all else fails, using Google.
 
 @node Fancy splitting to parent
 @subsection Fancy splitting to parent
@@ -26490,10 +26472,10 @@ have to put a rule like this:
 
 in your fancy split setup.
 
-If @code{gnus-registry-register-all} is non-@code{nil} (the default), the
-registry will perform splitting for all messages.  If it is nil,
-splitting will only happen for children of messages you've explicitly
-registered.
+If @code{gnus-registry-register-all} is non-@code{nil} (the default),
+the registry will perform splitting for all messages.  If it is
+@code{nil}, splitting will only happen for children of messages you've
+explicitly registered.
 
 In addition, you may want to customize the following variables.
 
@@ -26713,9 +26695,12 @@ buffers.  It is enabled with
 @table @kbd
 @item C-c C-m C-a
 @findex gnus-dired-attach
+@vindex gnus-dired-attach-at-end
 @cindex attachments, selection via dired
 Send dired's marked files as an attachment (@code{gnus-dired-attach}).
-You will be prompted for a message buffer.
+The function prompts for a message buffer, and by default attaches files
+to the end of that buffer; customize @code{gnus-dired-attach-at-end} to
+place the attachments at point instead.
 
 @item C-c C-m C-l
 @findex gnus-dired-find-file-mailcap
@@ -28828,7 +28813,7 @@ be read correctly in Emacs 22 and below.  If you want to use Gnus across
 different Emacs versions, you may set @code{mm-auto-save-coding-system}
 to @code{emacs-mule}.
 @c FIXME: Untested.  (Or did anyone test it?)
-@c Cf. http://thread.gmane.org/gmane.emacs.gnus.general/66251/focus=66344
+@c Cf. http://thread.gmane.org/gmane.emacs.gnus.general/66251/focus=66344 [dead link]
 
 @item Lisp files are now installed in @file{.../site-lisp/gnus/} by default.
 It defaulted to @file{.../site-lisp/} formerly.  In addition to this,
@@ -29341,13 +29326,13 @@ have names like @samp{gnu.emacs.gnus}.
 You can also have any number of foreign groups active at the same
 time.  These are groups that use non-native non-secondary back ends
 for getting news.  Foreign groups have names like
-@samp{nntp+news.gmane.org:gmane.emacs.gnus.devel}.
+@samp{nntp+news.gmane.io:gmane.emacs.gnus.devel}.
 
 @item secondary
 @cindex secondary
 Secondary back ends are somewhere half-way between being native and
 being foreign, but they mostly act like they are native, but they, too
-have names like @samp{nntp+news.gmane.org:gmane.emacs.gnus.devel}.
+have names like @samp{nntp+news.gmane.io:gmane.emacs.gnus.devel}.
 
 @item article
 @cindex article

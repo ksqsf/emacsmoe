@@ -1,6 +1,6 @@
 ;;; time.el --- display time, load and mail indicator in mode line of Emacs  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1993-1994, 1996, 2000-2023 Free Software
+;; Copyright (C) 1985-1987, 1993-1994, 1996, 2000-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -139,7 +139,8 @@ make the mail indicator stand out on a color display."
   :version "22.1"
   :type '(choice (const :tag "None" nil) face))
 
-(defface display-time-date-and-time nil
+(defface display-time-date-and-time
+  '((t nil))
   "Face for `display-time-format'."
   :group 'mode-line-faces
   :version "30.1")
@@ -588,7 +589,7 @@ See `world-clock'."
 (defun world-clock ()
   "Display a world clock buffer with times in various time zones.
 The variable `world-clock-list' specifies which time zones to use.
-To turn off the world time display, go to the window and type `\\[quit-window]'."
+To turn off the world time display, go to the window and type \\[quit-window]."
   (interactive)
   (if-let ((buffer (get-buffer world-clock-buffer-name)))
       (pop-to-buffer buffer)

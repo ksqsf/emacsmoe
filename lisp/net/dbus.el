@@ -1,6 +1,6 @@
 ;;; dbus.el --- Elisp bindings for D-Bus. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2007-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: comm, hardware
@@ -371,7 +371,11 @@ object is returned instead of a list containing this single Lisp object.
 	 (apply
           #'dbus-message-internal dbus-message-type-method-call
           bus service path interface method #'dbus-call-method-handler args))
-        (result (cons :pending nil)))
+        (result (unless executing-kbd-macro (cons :pending nil))))
+
+    ;; While executing a keyboard macro, we run into an infinite loop,
+    ;; receiving the event -1.  So we don't try to get the result.
+    ;; (Bug#62018)
 
     ;; Wait until `dbus-call-method-handler' has put the result into
     ;; `dbus-return-values-table'.  If no timeout is given, use the
@@ -682,7 +686,9 @@ operation.  One of the following keywords is returned:
 `:non-existent': Service name does not exist on this bus.
 
 `:not-owner': We are neither the primary owner nor waiting in the
-queue of this service."
+queue of this service.
+
+When SERVICE is not a known name but a unique name, the function returns nil."
 
   (maphash
    (lambda (key value)
@@ -694,14 +700,17 @@ queue of this service."
 		 (puthash key (delete elt value) dbus-registered-objects-table)
 	       (remhash key dbus-registered-objects-table)))))))
    dbus-registered-objects-table)
-  (let ((reply (dbus-call-method
-		bus dbus-service-dbus dbus-path-dbus dbus-interface-dbus
-		"ReleaseName" service)))
-    (pcase reply
-      (1 :released)
-      (2 :non-existent)
-      (3 :not-owner)
-      (_ (signal 'dbus-error (list "Could not unregister service" service))))))
+
+  (unless (string-prefix-p ":" service)
+    (let ((reply (dbus-call-method
+		  bus dbus-service-dbus dbus-path-dbus dbus-interface-dbus
+		  "ReleaseName" service)))
+      (pcase reply
+        (1 :released)
+        (2 :non-existent)
+        (3 :not-owner)
+        (_ (signal
+            'dbus-error (list "Could not unregister service" service)))))))
 
 (defun dbus-register-signal
   (bus service path interface signal handler &rest args)

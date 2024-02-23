@@ -1,6 +1,6 @@
 /* ebrowse.c --- parsing files for the ebrowse C++ browser
 
-Copyright (C) 1992-2023 Free Software Foundation, Inc.
+Copyright (C) 1992-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -3767,8 +3767,9 @@ main (int argc, char **argv)
 	  if (n_input_files == input_filenames_size)
 	    {
 	      input_filenames_size = max (10, 2 * input_filenames_size);
-	      input_filenames = (char **) xrealloc ((void *)input_filenames,
-						    input_filenames_size);
+	      input_filenames = xrealloc (input_filenames,
+					  (input_filenames_size
+					   * sizeof *input_filenames));
 	    }
           input_filenames[n_input_files++] = xstrdup (optarg);
           break;

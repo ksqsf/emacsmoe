@@ -1,6 +1,6 @@
 ;;; checkdoc.el --- check documentation strings for style requirements  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1997-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2024 Free Software Foundation, Inc.
 
 ;; Author: Eric M. Ludlam <zappo@gnu.org>
 ;; Old-Version: 0.6.2
@@ -556,7 +556,8 @@ the users will view as each check is completed."
   "Display and update the status buffer for the current checkdoc mode.
 CHECK is a list of four strings stating the current status of each
 test; the nth string describes the status of the nth test."
-  (let (temp-buffer-setup-hook)
+  (let (temp-buffer-setup-hook
+        (temp-buffer-show-hook #'special-mode))
     (with-output-to-temp-buffer "*Checkdoc Status*"
       (mapc #'princ
             (list "Buffer comments and tags:  " (nth 0 check)
@@ -1611,8 +1612,11 @@ may require more formatting")
        (let ((f nil) (m nil) (start (point))
              ;; Ignore the "A-" modifier: it is uncommon in practice,
              ;; and leads to false positives in regexp ranges.
-             (re "[^`‘A-Za-z0-9_]\\([CMs]-[a-zA-Z]\\|\\(\\([CMs]-\\)?\
-mouse-[0-3]\\)\\)\\>"))
+             (re (rx (not (any "0-9A-Za-z_`‘-"))
+                     (group (or (seq (any "CMs") "-" (any "A-Za-z"))
+                                (group (opt (group (any "CMs") "-"))
+                                       "mouse-" (any "0-3"))))
+                     eow)))
 	 ;; Find the first key sequence not in a sample
 	 (while (and (not f) (setq m (re-search-forward re e t)))
 	   (setq f (not (checkdoc-in-sample-code-p start e))))
@@ -1779,7 +1783,7 @@ function,command,variable,option or symbol." ms1))))))
 		   (order (and (nth 3 fp) (car (nth 3 fp))))
 		   (nocheck (append '("&optional" "&rest" "&key" "&aux"
                                       "&context" "&environment" "&whole"
-                                      "&body" "&allow-other-keys")
+                                      "&body" "&allow-other-keys" "nil")
                                     (nth 3 fp)))
 		   (inopts nil))
 	       (while (and args found (> found last-pos))
@@ -1990,7 +1994,7 @@ from the comment."
           (defun-depth (ppss-depth (syntax-ppss)))
 	  (lst nil)
 	  (ret nil)
-	  (oo (make-vector 3 0)))	;substitute obarray for `read'
+	  (oo (obarray-make 3)))	;substitute obarray for `read'
       (forward-char 1)
       (forward-sexp 1)
       (skip-chars-forward " \n\t")
@@ -2042,8 +2046,7 @@ from the comment."
 			   (condition-case nil
 			       (setq lst (read (current-buffer)))
 			     (error (setq lst nil))) ; error in text
-                           (if (not (listp lst)) ; not a list of args
-                               (setq lst (list lst)))
+                           (setq lst (ensure-list lst))
 			   (if (and lst (not (symbolp (car lst)))) ;weird arg
 			       (setq lst nil))
 			   (while lst
@@ -2382,7 +2385,7 @@ Code:, and others referenced in the style guide."
        err
        (or
 	;; * Commentary Section
-        (if (and (not (lm-commentary-mark))
+        (if (and (not (lm-commentary-start))
                  ;; No need for a commentary section in test files.
                  (not (string-match
                        (rx (or (seq (or "-test.el" "-tests.el") string-end)
@@ -2419,10 +2422,10 @@ Code:, and others referenced in the style guide."
 	(if (or (not checkdoc-force-history-flag)
 		(file-exists-p "ChangeLog")
 		(file-exists-p "../ChangeLog")
-                (lm-history-mark))
+                (lm-history-start))
 	    nil
 	  (progn
-	    (goto-char (or (lm-commentary-mark) (point-min)))
+            (goto-char (or (lm-commentary-start) (point-min)))
 	    (cond
 	     ((re-search-forward
 	       "write\\s-+to\\s-+the\\s-+Free Software Foundation, Inc."
@@ -2443,7 +2446,7 @@ Code:, and others referenced in the style guide."
        err
        (or
 	;; * Code section
-	(if (not (lm-code-mark))
+        (if (not (lm-code-start))
 	    (let ((cont t)
 		  pos)
 	      (goto-char (point-min))
@@ -2494,7 +2497,7 @@ Code:, and others referenced in the style guide."
       ;; Let's spellcheck the commentary section.  This is the only
       ;; section that is easy to pick out, and it is also the most
       ;; visible section (with the finder).
-      (let ((cm (lm-commentary-mark)))
+      (let ((cm (lm-commentary-start)))
         (when cm
           (save-excursion
             (goto-char cm)
@@ -2546,11 +2549,11 @@ Argument END is the maximum bounds to search in."
                  (rx "("
                      (* (syntax whitespace))
                      (group
-                      (or (seq (* (group (or wordchar (syntax symbol))))
+                      (or (seq (* (or wordchar (syntax symbol)))
                                "error")
-                          (seq (* (group (or wordchar (syntax symbol))))
+                          (seq (* (or wordchar (syntax symbol)))
                                (or "y-or-n-p" "yes-or-no-p")
-                               (? (group "-with-timeout")))
+                               (? "-with-timeout"))
                           "checkdoc-autofix-ask-replace"))
                      (+ (any "\n\t ")))
                  end t))

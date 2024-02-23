@@ -1,6 +1,6 @@
 Known Problems with GNU Emacs
 
-Copyright (C) 1987-1989, 1993-1999, 2001-2023 Free Software Foundation,
+Copyright (C) 1987-1989, 1993-1999, 2001-2024 Free Software Foundation,
 Inc.
 See the end of the file for license conditions.
 
@@ -441,6 +441,17 @@ environment.
 
 ** Keyboard problems
 
+*** PGTK build of Emacs running on Wayland doesn't recognize Hyper modifier
+
+If you arrange for the Wayland compositor to send the Hyper key
+modifier (e.g., via XKB customizations), the Hyper modifier will still
+not be reported to Emacs.
+
+The reason is that GDK 3.x doesn't recognize the Hyper key modifier.
+Since GDK 3.x is no longer developed, this bug in GDK will probably
+never be solved.  And the Emacs PGTK build cannot yet support GTK4,
+where this problem is reportedly solved.
+
 *** Unable to enter the M-| key on some German keyboards.
 Some users have reported that M-| suffers from "keyboard ghosting".
 This can't be fixed by Emacs, as the keypress never gets passed to it
@@ -464,6 +475,29 @@ them to two different keys.
 You are probably using a shell that doesn't support job control, even
 though the system itself is capable of it.  Either use a different shell,
 or set the variable 'cannot-suspend' to a non-nil value.
+
+*** Emacs running on WSL receives stray characters as input.
+
+For example, you could see Emacs inserting 'z' characters even though
+nothing is typed on the keyboard, and even if you unplug the keyboard.
+
+The reason is a bug in the WSL X server's handling of key-press and
+key-repeat events.  A workaround is to use the Cygwin or native
+MS-Windows build of Emacs instead.
+
+*** On MS-Windows, the Windows key gets "stuck".
+When this problem happens, Windows behaves as if the Windows key were
+permanently pressed down.  This could be a side effect of Emacs on
+MS-Windows hooking keyboard input on a low level, in order to support
+registering the Windows keys as hot keys.  If that hook takes too much
+time for some reason, Windows can decide to remove the hook, which
+then has this effect.
+
+This is arguably a bug in Emacs, for which we don't yet have a
+solution.  To work around, set the 'LowLevelHooksTimeout' value in the
+registry key "HKEY_CURRENT_USER\Control Panel\Desktop" to a number
+higher than 200 msec; the maximum allowed value is 1000 msec (create
+the value if it doesn't exist under that key).
 
 ** Mailers and other helper programs
 
@@ -516,6 +550,24 @@ directory copy is ineffective.
 This is due to an arbitrary limit in certain versions of awk.
 The solution is to use gawk (GNU awk).
 
+*** Saving a file encrypted with GnuPG via EasyPG hangs.
+
+This is known to happen with GnuPG v2.4.1.  The only known workaround
+is to downgrade to a version of GnuPG older than 2.4.1, or upgrade to
+version 2.4.4 and newer, which reportedly solves the problem.  Note
+that GnuPG v2.2.42 and later also has this problem, so you should also
+avoid those later 2.2.4x versions; v2.2.41 is reported to work fine.
+
+*** EasyPG loopback pinentry does not work with gpgsm.
+
+This happens with the 'gpgsm' command from all versions of GnuPG.
+EasyPG relies on the machine-parseable interface that is provided by
+'gpg2' with option '--status-fd', but gpgsm does not support this.
+
+As a workaround, input the passphrase with a GUI-capable pinentry
+program like 'pinentry-gnome' or 'pinentry-qt5'.  Alternatively, you
+can use the 'pinentry' package from Emacs 25.
+
 ** Problems with hostname resolution
 
 *** Emacs does not know your host's fully-qualified domain name.
@@ -567,6 +619,20 @@ This can happen with CVS versions 1.12.8 and 1.12.9.  Upgrade to CVS
 1.12.10 or newer to fix this problem.
 
 ** Miscellaneous problems
+
+*** 'set-mouse-color' and the '-ms' command line argument do not work.
+
+Systems where the default cursors are not simple 1 bit-per-pixel
+bitmaps usually forbid recoloring the cursor, since it is unclear
+which colors should replace those already present within each cursor
+image.  For example, 'set-mouse-color' and '-ms' have no function on X
+systems with GNOME, KDE, and other recent desktop environments
+employing cursor images containing colors and partial transparency.
+
+Changing the cursor color is also impossible on MS-Windows and PGTK
+systems.  In the former case, it is because the prerequisite code has
+yet to be written.  In the latter, it is because GTK does not provide
+for changing the color of cursor images.
 
 *** Display artifacts on GUI frames on X-based systems.
 
@@ -795,7 +861,7 @@ On many systems, it is possible to set LD_LIBRARY_PATH in your
 environment to specify additional directories where shared libraries
 can be found.
 
-Other systems allow to set LD_RUN_PATH in a similar way, but before
+Other systems allow setting LD_RUN_PATH in a similar way, but before
 Emacs is linked.  With LD_RUN_PATH set, the linker will include a
 specified run-time search path in the executable.
 
@@ -1156,43 +1222,6 @@ do anything about it.
 
 ** International characters aren't displayed under X.
 
-*** Missing X fonts
-
-XFree86 4 contains many fonts in iso10646-1 encoding which have
-minimal character repertoires (whereas the encoding part of the font
-name is meant to be a reasonable indication of the repertoire
-according to the XLFD spec).  Emacs may choose one of these to display
-characters from the mule-unicode charsets and then typically won't be
-able to find the glyphs to display many characters.  (Check with C-u
-C-x = .)  To avoid this, you may need to use a fontset which sets the
-font for the mule-unicode sets explicitly.  E.g. to use GNU unifont,
-include in the fontset spec:
-
-mule-unicode-2500-33ff:-gnu-unifont-*-iso10646-1,\
-mule-unicode-e000-ffff:-gnu-unifont-*-iso10646-1,\
-mule-unicode-0100-24ff:-gnu-unifont-*-iso10646-1
-
-** The UTF-8/16/7 coding systems don't encode CJK (Far Eastern) characters.
-
-Emacs directly supports the Unicode BMP whose code points are in the
-ranges 0000-33ff and e000-ffff, and indirectly supports the parts of
-CJK characters belonging to these legacy charsets:
-
-    GB2312, Big5, JISX0208, JISX0212, JISX0213-1, JISX0213-2, KSC5601
-
-The latter support is done in Utf-Translate-Cjk mode (turned on by
-default).   Which Unicode CJK characters are decoded into which Emacs
-charset is decided by the current language environment.  For instance,
-in Chinese-GB, most of them are decoded into chinese-gb2312.
-
-If you read UTF-8 data with code points outside these ranges, the
-characters appear in the buffer as raw bytes of the original UTF-8
-(composed into a single quasi-character) and they will be written back
-correctly as UTF-8, assuming you don't break the composed sequences.
-If you read such characters from UTF-16 or UTF-7 data, they are
-substituted with the Unicode 'replacement character', and you lose
-information.
-
 ** Accented ISO-8859-1 characters are displayed as | or _.
 
 Try other font set sizes (S-mouse-1).  If the problem persists with
@@ -1229,6 +1258,16 @@ In your ~/.Xresources file, then run
   $ xrdb ~/.Xresources
 
 And restart Emacs.
+
+** Emacs hangs when using XIM
+
+This is due to an old bug in the implementation of the X protocol's
+XIM transport: when an input method crashes for some reason, Xlib
+cannot recover.  Emacs cannot do anything about this except wait for
+input method developers to fix their crashes.  You can work around
+these problems by disabling XIM in your X resources:
+
+  Emacs.useXIM: false
 
 ** On Haiku, BeCJK doesn't work properly with Emacs
 
@@ -1644,6 +1683,18 @@ to normal, do
 
   (set-scroll-bar-mode 'left)
 
+*** Redisplay with scaled images is slow in Emacs built with Cairo.
+
+Cairo expends a noticeable amount of CPU time displaying large images
+with applied transforms.  These images most frequently appear within
+EWW buffers or in Image Mode buffers after executing the image scaling
+commands `i +' or `i -', and their presence incurs a performance
+penalty of hundereds of milliseconds to seconds upon redisplay.  The
+remedy is to build Emacs without Cairo after verifying the XRender
+extension is present on your X server and its headers are present on
+your system, in which case Emacs will use XRender to efficiently
+perform image transforms within the X server.
+
 *** Error messages about undefined colors on X.
 
 The messages might say something like this:
@@ -1700,7 +1751,7 @@ which can be carried out at the same time:
    forwarded X connection (ssh -XC remotehostname emacs ...).
 
    Keep in mind that this does not help with latency problems, only
-   andwidth ones.
+   bandwidth ones.
 
 5) Use lbxproxy on the remote end of the connection.  This is an
    interface to the low bandwidth X extension in some outdated X
@@ -1978,7 +2029,7 @@ remote X server, try this:
 
 *** Dropping text on xterm doesn't work.
 
-Emacs sends sythetic button events to legacy clients such as xterm
+Emacs sends synthetic button events to legacy clients such as xterm
 that do not support either the XDND or Motif drag-and-drop protocols
 in order to "paste" the text that was dropped.  Unfortunately, xterm
 is configured to ignore these events by default.  Add the following to
@@ -1990,6 +2041,16 @@ Note that this can in theory pose a security risk, but in practice
 modern X servers have so many other ways to send input to clients
 without signifying that the event is synthesized that it does not
 matter.
+
+*** Programs which use XSendEvent cannot send input events to Emacs.
+
+Emacs built to use the X Input Extension cannot receive core input
+events sent through the SendEvent server request, since these events
+intercepted by the X server when sent to input extension clients.
+
+For such programs to function again, Emacs must be run on an X server
+where the input extension is disabled, or alternatively be configured
+with the "--without-xinput2" option.
 
 * Runtime problems on character terminals
 
@@ -2313,6 +2374,33 @@ recommended way of turning on Font-lock is by typing "M-x
 global-font-lock-mode RET" or by customizing the variable
 'global-font-lock-mode'.
 
+** Colors are not available or messed up on TTY frames inside 'screen'.
+
+This can happen if you have COLORTERM=truecolor defined in the
+environment when Emacs starts, but your version of 'screen' doesn't
+actually support 24-bit true colors.
+
+The COLORTERM environment variable is supposed to be set to the value
+"truecolor" only if the terminal used by Emacs actually supports true
+color.  Emacs does not have any means of verifying that this support
+is available, it takes the fact that the variable is defined to this
+value as an indication that true color support is, in fact, available,
+and uses color setting commands that COLORTERM=truecolor presumes,
+bypassing the usual Terminfo capabilities related to colors.
+
+Some text-mode terminals, such as GNOME Terminal, are known to set
+this environment variable, supposedly to announce their own support
+for true color; however the setting is then inherited by any other
+terminal emulators started from such a terminal, even though those
+other terminal emulators might not themselves support true color using
+the same commands as Emacs uses when it sees COLORTERM=truecolor.
+
+The solution is to either upgrade to a newer version of 'screen'
+(version 5.x or later reportedly supports true color), or to unset the
+COLORTERM variable before starting 'screen', and let Emacs use the
+color support provided by the terminal emulator as defined in the
+Terminfo database.
+
 ** Unexpected characters inserted into the buffer when you start Emacs.
 See e.g. <URL:https://debbugs.gnu.org/11129>
 
@@ -2487,7 +2575,7 @@ keyboard; printing that file on a PostScript printer will show what
 keys can serve as Meta.
 
 The 'xkeycaps' also shows a visual representation of the current
-keyboard settings.  It also allows to modify them.
+keyboard settings.  It also allows modifying them.
 
 *** GNU/Linux: slow startup on Linux-based GNU systems.
 
@@ -2681,6 +2769,15 @@ Emacs so that it isn't compiled with '-O5'.
 We list bugs in current versions here.  See also the section on legacy
 systems.
 
+*** On Solaris 10, running 'configure' with "/bin/sh" produces errors.
+The "/bin/sh" shell on Solaris is an ancient and non-POSIX shell, so
+we recommend not to use it.  The Emacs 'configure' script should find
+an appropriate shell and re-exec itself with that shell, unless you
+force it to use "/bin/sh" by using "CONFIG_SHELL=/bin/sh" on the
+'configure' command line.  So either don't use CONFIG_SHELL, or, if
+you'd rather pick the shell yourself, choose "/bin/bash" or "/bin/ksh"
+or "/usr/xpg4/bin/sh" instead.
+
 *** On Solaris 10 sparc, Emacs crashes during the build while saving state.
 This was observed for Emacs 28.1 on Solaris 10 32-bit sparc, with
 Oracle Developer Studio 12.6 (Sun C 5.15).  The failure was intermittent,
@@ -2706,6 +2803,59 @@ This is a Solaris feature (at least on Intel x86 cpus).  Type C-r
 C-r C-t, to toggle whether C-x gets through to Emacs.
 
 * Runtime problems specific to MS-Windows
+
+** Emacs with native compilation crashes/signals errors accessing *.eln files
+
+This is known to be caused by some flavors of Windows anti-virus
+software.  The problem could manifest itself in several ways:
+
+  . Emacs crashes when it tries to load certain *.eln files
+  . Emacs signals an error when it tries to load some *.eln files,
+    claiming they are "not GPL compatible"
+  . Emacs crashes during GC when it calls unload_comp_unit
+
+This was specifically reported to happen with *.eln files in
+directories under the C:\Users directory, which is where Emacs on
+Windows places the emulated HOME directory, and thus also the
+~/.emacs.d/eln-cache directory holding the *.eln files compiled during
+Emacs sessions (as opposed to those that came precompiled and were
+installed with the rest of Emacs distribution).
+
+If you cannot disable such anti-virus software or switch to another
+one, you could use the following workarounds:
+
+  . Define the HOME environment variable to point to a directory
+    outside of the C:\Users tree, then copy/move your ~/.emacs.d
+    directory to that new home directory.
+  . Move all the *.eln files from ~/.emacs.d/eln-cache to a directory
+    out of the C:\Users tree, and customize Emacs to use that
+    directory for *.eln files.  This requires calling the function
+    startup-redirect-eln-cache in your init file, to force Emacs to
+    write *.eln files compiled at run time to that directory.
+  . Delete all *.eln files in your ~/.emacs.d/eln-cache directory, and
+    then disable run-time native compilation.  To disable native
+    compilation, set the variables native-comp-jit-compilation and
+    native-comp-enable-subr-trampolines to nil.
+  . Install Emacs built without native compilation.
+
+With any of the above methods, you'd need to restart Emacs (and
+preferably also your Windows system) after making the changes, to have
+them take effect.
+
+*** MinGW64 Emacs built with -D_FORTIFY_SOURCE=2 misbehaves
+
+Using this preprocessor option when building Emacs with MinGW64
+produces an Emacs binary that behaves incorrectly.  In particular,
+running asynchronous shell command, e.g., with 'M-&', causes Emacs to
+use 100% of CPU and start allocating a lot of memory.  For the same
+reason, asynchronous native-compilation will hang Emacs (which could
+wedge Emacs during startup, if your Emacs is configured to download
+and install packages via package.el every startup).  'M-x run-python',
+'M-x shell', and similar commands also hang.  Other commands might
+also cause high CPU and/or memory usage.
+
+The workaround is to rebuild Emacs without the -D_FORTIFY_SOURCE=2
+option.
 
 ** Emacs on Windows 9X requires UNICOWS.DLL
 
@@ -3265,6 +3415,133 @@ Compose key to stop working.
 On X Windows, users should not use Emacs configured with PGTK, since
 this and many other problems do not exist on the regular X builds.
 
+* Runtime problems specific to Android
+
+** Text displayed in the default monospace font looks horrible.
+
+TrueType fonts incorporate instruction code executed by the font
+scaler (the component responsible for transforming outlines into
+bitmap images capable of being displayed onscreen) to align features
+of each glyph to pixel boundaries while maintaining their shape, in
+order to alleviate visual imperfections produced by scaling.  The
+substandard instruction code provided by the Android "Droid Sans Mono"
+font misplaces features of glyphs containing, as components, "E" and
+"F", between PPEM sizes of 16 and 24, resulting in noticeable
+whitespace inconsistencies with other glyphs.  Furthermore, the
+vertical stem in the glyph "T" is positioned too far to the left at
+PPEM sizes of 12.
+
+The remedy for this is to replace the instruction code with
+automatically generated code from the FreeType project's "ttfautohint"
+program.  First, extract '/system/fonts/DroidSansMono.ttf' from your
+device:
+
+  $ adb pull /system/fonts/DroidSansMono.ttf
+  /system/fonts/DroidSansMono.ttf: 1 file pulled, 0 skipped.
+  23.1 MB/s (90208 bytes in 0.004s)
+
+install the "ttfautohint" program:
+
+  http://freetype.org/ttfautohint/
+
+generate a font file with new hinting instructions:
+
+  $ ttfautohint DroidSansMono.ttf > DroidSansMono.ttf.rpl
+
+and upload them to your device, either back to /system/fonts (which is
+allowed by free versions of Android, such as Replicant):
+
+  $ adb root
+  $ adb remount
+  $ adb push DroidSansMono.ttf.rpl /system/fonts/DroidSansMono.ttf
+
+or to the user fonts directory described in the "Android Fonts" node
+of the Emacs manual.  You may want to perform this procedure even if
+you are not experiencing problems with character display, as the
+automatically generated instructions result in more legible text.
+
+** Glyphs are missing within the "Arial" font or it does not load.
+
+Old versions of this font included instruction code that assumed a
+degree of latitude from the Microsoft font scaler, which grants fonts
+leave to address nonexistent points without aborting the scaling
+process, among other invalid TrueType operations.  This issue may
+extend beyond Arial to encompass a larger selection of old fonts
+designed by Microsoft or Monotype; most of the time, installing newer
+versions of such fonts will suffice.
+
+** Some TrueType test fonts don't work.
+
+It is unlikely that any of these fonts will really prove useful for
+text editing tasks, since they are designed for the express purpose of
+testing a TrueType font scaler.  The following explanation is present
+only to satisfy a cat-like curiosity.
+
+Most TrueType test fonts "hide" points by moving them to a
+preposterous location outside the confines of the glyph bounding box.
+The Microsoft scaler and FreeType promptly disregard such points.
+
+Nothing in the TrueType specifications implies that points "hidden" in
+this fashion should be afforded any special treatment, and thus Emacs
+eschews doing so.  Consequently, black streaks are displayed as
+Emacs interpolates glyph edges between points within the glyph and
+points the test font attempts to hide.
+
+Since this behavior does not influence the display of real fonts, no
+action will be taken to address this problem.
+
+** Some other font's instruction code produces undesirable results.
+
+Executing instruction code is not a strict requirement for producing
+correct display results from most current fonts.  If a font's
+instruction code produces results that are merely unpleasing, but not
+incorrect, then the font was presumably not designed for Emacs's
+scaler.  If its uninstructed glyphs are satisfactory (such as when
+your screen resolution is high enough to ameliorate scaling
+artifacts), disable instruction code execution by appending its family
+name to the variable 'sfnt-uninstructable-font-regexp', then
+restarting Emacs.
+
+** CJK text does not display in Emacs, but does in other programs.
+
+When inserting CJK text into a buffer or visiting a file containing
+CJK text, Emacs often fails to locate a suitable font.  This problem
+manifests itself as hollow squares with numbers and letters within
+being displayed in lieu of the text itself.
+
+The reason for this is Emacs's absence of support for OpenType fonts
+utilizing CFF (Compact Font Format) outlines, which the CJK fonts
+bundled with Android have been distributed as since Android 7.0.
+
+The solution is to install a TrueType CJK font to the user fonts
+directory detailed in the "Android Fonts" node of the Emacs manual.
+
+Introducing support for the byzantine CFF font format into the Android
+port is a large undertaking that we are looking for volunteers to
+perform.  If you are interested in taking responsibility for this
+task, please contact <emacs-devel@gnu.org>.
+
+** Emacs can only execute spasmodically in the background.
+
+Recent Android releases impose "battery optimization" on programs for
+which it is not expressly disabled; such optimization inhibits the
+execution of background services outside brief windows of time
+distributed at intervals of several dozens of minutes.  Such programs
+as ERC which must send "keep-alive" packets at a rate beyond that at
+which these windows arrive consequently lose, yielding connection
+timeouts after Emacs has been in the background long enough that
+battery optimization enters into effect.
+
+This optimization can be disabled through the Settings app: navigate
+to "Apps & notifications", "Emacs", "Battery", "Battery Optimization",
+before clicking the drop-down menu labeled "Not Optimized", selecting
+the option "All Apps", scrolling to "Emacs", clicking on its entry and
+selecting "Don't Optimize" in the dialog box thus displayed.
+
+The organization of the Settings app might disagree with that
+illustrated above, which if true you should consult the documentation
+or any search mechanism for it.
+
 * Build-time problems
 
 ** Configuration
@@ -3360,6 +3637,39 @@ issue is that Cygwin 1.5.19 did not have d_ino in 'struct dirent'.
 See
 
   https://lists.gnu.org/r/emacs-devel/2010-07/msg01266.html
+
+*** Building the MS-Windows port with native compilation fails
+
+This is known to happen when using MinGW64 GCC 13.1, and seems to
+affect byte-compilation: the built Emacs crashes while byte-compiling
+some Lisp files.  (This doesn't happen when building a release
+tarball, because all the Lisp files are already byte-compiled there,
+but then Emacs could crash later when you use it to byte-compile your
+or third-party Lisp packages.)
+
+The reason seems to be specific to MS-Windows or the MinGW64 port of
+GCC 13.1, and is somehow related to optimizations in this GCC version.
+There are several known workarounds:
+
+  . Use non-default optimization flags.  For example, configuring the
+    build like this will avoid the problem:
+
+     CFLAGS='-O1 -gdwarf-4 -g3' ./configure ...
+
+    (replace the ellipsis "..." with the rest of 'configure' options
+    and arguments).
+
+  . Prevent GCC from performing a specific optimization:
+
+     CFLAGS='-O2 -gdwarf-4 -g3 -fno-optimize-sibling-calls' ./configure ...
+
+    This is actually a variant of the previous workaround, except that
+    it allows you to have almost the full set of optimizations used by
+    -O2.
+
+  . Downgrade to GCC 12.x.
+
+  . Build Emacs without native compilation.
 
 *** Building the native MS-Windows port fails due to unresolved externals
 

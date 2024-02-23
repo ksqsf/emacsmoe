@@ -1,6 +1,6 @@
 ;;; subr-tests.el --- Tests for subr.el  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2015-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>,
 ;;         Nicolas Petton <nicolas@petton.fr>
@@ -345,18 +345,54 @@
 
 ;;;; Mode hooks.
 
-(defalias 'subr-tests--parent-mode
-  (if (fboundp 'prog-mode) 'prog-mode 'fundamental-mode))
+(defalias 'subr-tests--parent-mode #'prog-mode)
 
+(define-derived-mode subr-tests--derived-mode-1 prog-mode "test")
+(define-derived-mode subr-tests--derived-mode-2 subr-tests--parent-mode "test")
 (ert-deftest provided-mode-derived-p ()
   ;; base case: `derived-mode' directly derives `prog-mode'
-  (should (progn
-            (define-derived-mode derived-mode prog-mode "test")
-            (provided-mode-derived-p 'derived-mode 'prog-mode)))
-  ;; edge case: `derived-mode' derives an alias of `prog-mode'
-  (should (progn
-            (define-derived-mode derived-mode subr-tests--parent-mode "test")
-            (provided-mode-derived-p 'derived-mode 'prog-mode))))
+  (should (provided-mode-derived-p 'subr-tests--derived-mode-1 'prog-mode))
+  ;; Edge cases: aliases along the derivation.
+  (should (provided-mode-derived-p 'subr-tests--parent-mode
+                                   'subr-tests--parent-mode))
+  (should (provided-mode-derived-p 'subr-tests--derived-mode-2
+                                   'subr-tests--parent-mode))
+  (should (provided-mode-derived-p 'subr-tests--derived-mode-2 'prog-mode)))
+
+
+(define-derived-mode subr-tests--mode-A subr-tests--derived-mode-1 "t")
+(define-derived-mode subr-tests--mode-B subr-tests--mode-A "t")
+(defalias 'subr-tests--mode-C #'subr-tests--mode-B)
+(derived-mode-add-parents 'subr-tests--mode-A '(subr-tests--mode-C))
+
+(ert-deftest subr-tests--derived-mode-add-parents ()
+  ;; The Right Answer is somewhat unclear in the presence of cycles,
+  ;; but let's make sure we get tolerable answers.
+  ;; FIXME: Currently `prog-mode' doesn't always end up at the end :-(
+  (let ((set-equal (lambda (a b)
+                     (not (or (cl-set-difference a b)
+                              (cl-set-difference b a))))))
+    (dolist (mode '(subr-tests--mode-A subr-tests--mode-B subr-tests--mode-C))
+      (should (eq (derived-mode-all-parents mode)
+                  (derived-mode-all-parents mode)))
+      (should (eq mode (car (derived-mode-all-parents mode))))
+      (should (funcall set-equal
+                       (derived-mode-all-parents mode)
+                       '(subr-tests--mode-A subr-tests--mode-B prog-mode
+                         subr-tests--mode-C subr-tests--derived-mode-1))))))
+
+(ert-deftest subr-tests--merge-ordered-lists ()
+  (should (equal (merge-ordered-lists
+                  '((B A) (C A) (D B) (E D C))
+                  (lambda (_) (error "cycle")))
+                 '(E D B C A)))
+  (should (equal (merge-ordered-lists
+                  '((E D C) (B A) (C A) (D B))
+                  (lambda (_) (error "cycle")))
+                 '(E D C B A)))
+  (should-error (merge-ordered-lists
+                 '((E C D) (B A) (A C) (D B))
+                 (lambda (_) (error "cycle")))))
 
 (ert-deftest number-sequence-test ()
   (should (= (length
@@ -579,7 +615,8 @@
           (cons (mapcar (pcase-lambda (`(,evald ,func ,args ,_))
                           `(,evald ,func ,@args))
                         (backtrace-frames base))
-                (subr-test--backtrace-frames-with-backtrace-frame base))))))
+                (subr-test--backtrace-frames-with-backtrace-frame base))
+        (sit-for 0)))))                 ; dummy unwind form
 
 (defun subr-test--frames-1 (base)
   (subr-test--frames-2 base))
@@ -1204,6 +1241,87 @@ final or penultimate step during initialization."))
          (a-dedup (delete-consecutive-dups a t)))
     (should (equal a-dedup '("a" "b" "a" "b" "c")))
     (should (eq a a-dedup))))
+
+(ert-deftest subr--copy-tree ()
+  ;; Check that values other than conses, vectors and records are
+  ;; neither copied nor traversed.
+  (let ((s (propertize "abc" 'prop (list 11 12)))
+        (h (make-hash-table :test #'equal)))
+    (puthash (list 1 2) (list 3 4) h)
+    (dolist (x (list nil 'a "abc" s h))
+      (should (eq (copy-tree x) x))
+      (should (eq (copy-tree x t) x))))
+
+  ;; Use the printer to detect common parts of Lisp values.
+  (let ((print-circle t))
+    (cl-labels ((prn3 (x y z) (prin1-to-string (list x y z)))
+                (cat3 (x y z) (concat "(" x " " y " " z ")")))
+      (let ((x '(a (b ((c) . d) e) (f))))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "(a (b ((c) . d) e) (f))"
+                             "(a (b ((c) . d) e) (f))"
+                             "(a (b ((c) . d) e) (f))"))))
+      (let ((x '(a [b (c d)] #s(e (f [g])))))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "(a #1=[b (c d)] #2=#s(e (f [g])))"
+                             "(a #1# #2#)"
+                             "(a [b (c d)] #s(e (f [g])))"))))
+      (let ((x [a (b #s(c d))]))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "#1=[a (b #s(c d))]"
+                             "#1#"
+                             "[a (b #s(c d))]"))))
+      (let ((x #s(a (b [c d]))))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "#1=#s(a (b [c d]))"
+                             "#1#"
+                             "#s(a (b [c d]))"))))
+      ;; Check cdr recursion.
+      (let ((x '(a b . [(c . #s(d))])))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "(a b . #1=[(c . #s(d))])"
+                             "(a b . #1#)"
+                             "(a b . [(c . #s(d))])"))))
+      ;; Check that we can copy DAGs (the result is a tree).
+      (let ((x (list '(a b) nil [c d] nil #s(e f) nil)))
+        (setf (nth 1 x) (nth 0 x))
+        (setf (nth 3 x) (nth 2 x))
+        (setf (nth 5 x) (nth 4 x))
+        (should (equal (prn3 x (copy-tree x) (copy-tree x t))
+                       (cat3 "(#1=(a b) #1# #2=[c d] #2# #3=#s(e f) #3#)"
+                             "((a b) (a b) #2# #2# #3# #3#)"
+                             "((a b) (a b) [c d] [c d] #s(e f) #s(e f))")))))))
+
+(ert-deftest condition-case-unless-debug ()
+  "Test `condition-case-unless-debug'."
+  (let ((debug-on-error nil))
+    (with-suppressed-warnings ((suspicious condition-case))
+      (should (= 0 (condition-case-unless-debug nil 0))))
+    (should (= 0 (condition-case-unless-debug nil 0 (t 1))))
+    (should (= 0 (condition-case-unless-debug x 0 (t (1+ x)))))
+    (should (= 1 (condition-case-unless-debug nil (error "") (t 1))))
+    (should (equal (condition-case-unless-debug x (error "") (t x))
+                   '(error "")))))
+
+(ert-deftest condition-case-unless-debug-success ()
+  "Test `condition-case-unless-debug' with :success (bug#64404)."
+  (let ((debug-on-error nil))
+    (should (= 1 (condition-case-unless-debug nil 0 (:success 1))))
+    (should (= 1 (condition-case-unless-debug nil 0 (:success 1) (t 2))))
+    (should (= 1 (condition-case-unless-debug nil 0 (t 2) (:success 1))))
+    (should (= 1 (condition-case-unless-debug x 0 (:success (1+ x)))))
+    (should (= 1 (condition-case-unless-debug x 0 (:success (1+ x)) (t x))))
+    (should (= 1 (condition-case-unless-debug x 0 (t x) (:success (1+ x)))))
+    (should (= 2 (condition-case-unless-debug nil (error "")
+                   (:success 1) (t 2))))
+    (should (= 2 (condition-case-unless-debug nil (error "")
+                   (t 2) (:success 1))))
+    (should (equal (condition-case-unless-debug x (error "")
+                     (:success (1+ x)) (t x))
+                   '(error "")))
+    (should (equal (condition-case-unless-debug x (error "")
+                     (t x) (:success (1+ x)))
+                   '(error "")))))
 
 (provide 'subr-tests)
 ;;; subr-tests.el ends here

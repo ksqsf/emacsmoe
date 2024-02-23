@@ -1,6 +1,6 @@
 ;;; mule-conf.el --- configure multilingual environment  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2024 Free Software Foundation, Inc.
 ;; Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
 ;;   National Institute of Advanced Industrial Science and Technology (AIST)
 ;;   Registration Number H14PRO021
@@ -1600,7 +1600,7 @@ for decoding and encoding files, process I/O, etc."
 (define-coding-system 'utf-7
   "UTF-7 encoding of Unicode (RFC 2152)."
   :coding-type 'utf-8
-  :mnemonic ?U
+  :mnemonic ?u
   :mime-charset 'utf-7
   :charset-list '(unicode)
   :pre-write-conversion 'utf-7-pre-write-conversion

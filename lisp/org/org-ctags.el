@@ -1,9 +1,9 @@
 ;;; org-ctags.el --- Integrate Emacs "tags" Facility with Org -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2007-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2024 Free Software Foundation, Inc.
 
 ;; Author: Paul Sexton <eeeickythump@gmail.com>
-;; Keywords: org, wp
+;; Keywords: org, text
 
 ;; This file is part of GNU Emacs.
 ;;
@@ -156,7 +156,9 @@ Format is: /REGEXP/TAGNAME/FLAGS,TAGTYPE/
 See the ctags documentation for more information.")
 
 (defcustom org-ctags-path-to-ctags
-  (if (executable-find "ctags-exuberant") "ctags-exuberant" "ctags")
+  (if (executable-find "ctags-exuberant")
+      "ctags-exuberant"
+    ctags-program-name)
   "Name of the ctags executable file."
   :version "24.1"
   :type 'file)

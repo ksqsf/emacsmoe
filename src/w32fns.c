@@ -1,6 +1,6 @@
 /* Graphical user interface functions for the Microsoft Windows API.
 
-Copyright (C) 1989, 1992-2023 Free Software Foundation, Inc.
+Copyright (C) 1989, 1992-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -1537,14 +1537,16 @@ w32_clear_under_internal_border (struct frame *f)
     {
       int width = FRAME_PIXEL_WIDTH (f);
       int height = FRAME_PIXEL_HEIGHT (f);
-      int face_id =
-	(FRAME_PARENT_FRAME (f)
-	 ? (!NILP (Vface_remapping_alist)
-	    ? lookup_basic_face (NULL, f, CHILD_FRAME_BORDER_FACE_ID)
-	    : CHILD_FRAME_BORDER_FACE_ID)
-	 : (!NILP (Vface_remapping_alist)
-	    ? lookup_basic_face (NULL, f, INTERNAL_BORDER_FACE_ID)
-	    : INTERNAL_BORDER_FACE_ID));
+      int bottom_margin = FRAME_BOTTOM_MARGIN_HEIGHT (f);
+      int face_id = (FRAME_PARENT_FRAME (f)
+		     ? (!NILP (Vface_remapping_alist)
+			? lookup_basic_face (NULL, f,
+					     CHILD_FRAME_BORDER_FACE_ID)
+			: CHILD_FRAME_BORDER_FACE_ID)
+		     : (!NILP (Vface_remapping_alist)
+			? lookup_basic_face (NULL, f,
+					     INTERNAL_BORDER_FACE_ID)
+			: INTERNAL_BORDER_FACE_ID));
       struct face *face = FACE_FROM_ID_OR_NULL (f, face_id);
 
       block_input ();
@@ -1554,17 +1556,21 @@ w32_clear_under_internal_border (struct frame *f)
 	  /* Fill border with internal border face.  */
 	  unsigned long color = face->background;
 
-	  w32_fill_area (f, hdc, color, 0, FRAME_TOP_MARGIN_HEIGHT (f), width, border);
+	  w32_fill_area (f, hdc, color, 0, FRAME_TOP_MARGIN_HEIGHT (f),
+			 width, border);
 	  w32_fill_area (f, hdc, color, 0, 0, border, height);
 	  w32_fill_area (f, hdc, color, width - border, 0, border, height);
-	  w32_fill_area (f, hdc, color, 0, height - border, width, border);
+	  w32_fill_area (f, hdc, color, 0, height - bottom_margin - border,
+			 width, border);
 	}
       else
 	{
-	  w32_clear_area (f, hdc, 0, FRAME_TOP_MARGIN_HEIGHT (f), width, border);
+	  w32_clear_area (f, hdc, 0, FRAME_TOP_MARGIN_HEIGHT (f),
+			  width, border);
 	  w32_clear_area (f, hdc, 0, 0, border, height);
 	  w32_clear_area (f, hdc, width - border, 0, border, height);
-	  w32_clear_area (f, hdc, 0, height - border, width, border);
+	  w32_clear_area (f, hdc, 0, height - bottom_margin - border,
+			  width, border);
 	}
       release_frame_dc (f, hdc);
       unblock_input ();
@@ -1726,6 +1732,11 @@ w32_change_tab_bar_height (struct frame *f, int height)
      leading to the tab bar height being incorrectly set upon the next
      call to x_set_font.  (bug#59285) */
   int lines = height / unit;
+
+  /* Even so, HEIGHT might be less than unit if the tab bar face is
+     not so tall as the frame's font height; which if true lines will
+     be set to 0 and the tab bar will thus vanish.  */
+
   if (lines == 0 && height != 0)
     lines = 1;
 
@@ -1804,6 +1815,33 @@ w32_set_tool_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
     nlines = 0;
 
   w32_change_tool_bar_height (f, nlines * FRAME_LINE_HEIGHT (f));
+}
+
+static void
+w32_set_tool_bar_position (struct frame *f,
+			   Lisp_Object new_value,
+			   Lisp_Object old_value)
+{
+  if (!EQ (new_value, Qtop) && !EQ (new_value, Qbottom))
+    error ("Tool bar position must be either `top' or `bottom'");
+
+  if (EQ (new_value, old_value))
+    return;
+
+  /* Set the tool bar position.  */
+  fset_tool_bar_position (f, new_value);
+
+  /* Now reconfigure frame glyphs to place the tool bar at the
+     bottom.  While the inner height has not changed, call
+     `resize_frame_windows' to place each of the windows at its
+     new position.  */
+
+  adjust_frame_size (f, -1, -1, 3, false, Qtool_bar_position);
+  adjust_frame_glyphs (f);
+  SET_FRAME_GARBAGED (f);
+
+  if (FRAME_W32_WINDOW (f))
+    w32_clear_under_internal_border (f);
 }
 
 /* Enable or disable double buffering on frame F.
@@ -2338,7 +2376,7 @@ w32_init_class (HINSTANCE hinst)
 static void
 w32_applytheme (HWND hwnd)
 {
-  if (w32_darkmode)
+  if (w32_darkmode && w32_follow_system_dark_mode)
     {
       /* Set window theme to that of a built-in Windows app (Explorer),
 	 because it has dark scroll bars and other UI elements.  */
@@ -3819,7 +3857,7 @@ deliver_wm_chars (int do_translate, HWND hwnd, UINT msg, UINT wParam,
 
       /* What follows is just heuristics; the correct treatment requires
 	 non-destructive ToUnicode():
-	   http://search.cpan.org/~ilyaz/UI-KeyboardLayout/lib/UI/KeyboardLayout.pm#Can_an_application_on_Windows_accept_keyboard_events?_Part_IV:_application-specific_modifiers
+	   https://metacpan.org/dist/UI-KeyboardLayout/view/lib/UI/KeyboardLayout.pm#Can-an-application-on-Windows-accept-keyboard-events?-Part-IV:-application-specific-modifiers
 
 	 What one needs to find is:
 	   * which of the present modifiers AFFECT the resulting char(s)
@@ -3881,7 +3919,7 @@ deliver_wm_chars (int do_translate, HWND hwnd, UINT msg, UINT wParam,
 	 character is the same for AltGr-* (=rAlt-*) and Ctrl-Alt-* (in any
 	 combination of handedness).  For description of masks, see
 
-	   http://search.cpan.org/~ilyaz/UI-KeyboardLayout/lib/UI/KeyboardLayout.pm#Keyboard_input_on_Windows,_Part_I:_what_is_the_kernel_doing?
+	   https://metacpan.org/dist/UI-KeyboardLayout/view/lib/UI/KeyboardLayout.pm#Keyboard-input-on-Windows,-Part-I:-what-is-the-kernel-doing?
 
 	 By default, Emacs was using these coincidences via the following
 	 heuristics: it was treating:
@@ -8993,7 +9031,9 @@ and width values are in pixels.
 			       : 0),
 			      make_fixnum (tab_bar_height))),
 		Fcons (Qtool_bar_external, Qnil),
-		Fcons (Qtool_bar_position, tool_bar_height ? Qtop : Qnil),
+		Fcons (Qtool_bar_position, (tool_bar_height
+					    ? FRAME_TOOL_BAR_POSITION (f)
+					    : Qnil)),
 		Fcons (Qtool_bar_size,
 		       Fcons (make_fixnum
 			      (tool_bar_height
@@ -9084,10 +9124,11 @@ menu bar or tool bar of FRAME.  */)
 	  return list4 (make_fixnum (left + internal_border_width),
 			make_fixnum (top
 				     + FRAME_TAB_BAR_HEIGHT (f)
-				     + FRAME_TOOL_BAR_HEIGHT (f)
+				     + FRAME_TOOL_BAR_TOP_HEIGHT (f)
 				     + internal_border_width),
 			make_fixnum (right - internal_border_width),
-			make_fixnum (bottom - internal_border_width));
+			make_fixnum (bottom - internal_border_width
+				     - FRAME_TOOL_BAR_BOTTOM_HEIGHT (f)));
 	}
       else
 	return list4 (make_fixnum (left), make_fixnum (top),
@@ -10556,7 +10597,7 @@ frame_parm_handler w32_frame_parm_handlers[] =
   gui_set_font_backend,
   gui_set_alpha,
   0, /* x_set_sticky */
-  0, /* x_set_tool_bar_position */
+  w32_set_tool_bar_position,
   w32_set_inhibit_double_buffering,
   w32_set_undecorated,
   w32_set_parent_frame,
@@ -11080,12 +11121,20 @@ my_exception_handler (EXCEPTION_POINTERS * exception_data)
     return prev_exception_handler (exception_data);
   return EXCEPTION_EXECUTE_HANDLER;
 }
-#endif
+#endif	/* !CYGWIN */
 
 typedef USHORT (WINAPI * CaptureStackBackTrace_proc) (ULONG, ULONG, PVOID *,
 						      PULONG);
 
 #define BACKTRACE_LIMIT_MAX 62
+/* The below must be kept in sync with the value of the
+   -Wl,-image-base switch we use in LD_SWITCH_SYSTEM_TEMACS, see
+   configure.ac.  */
+#if defined MINGW_W64 && EMACS_INT_MAX > LONG_MAX
+# define DEFAULT_IMAGE_BASE (ptrdiff_t)0x400000000
+#else	/* 32-bit MinGW build */
+# define DEFAULT_IMAGE_BASE (ptrdiff_t)0x01000000
+#endif
 
 static int
 w32_backtrace (void **buffer, int limit)
@@ -11140,6 +11189,13 @@ emacs_abort (void)
       {
 	void *stack[BACKTRACE_LIMIT_MAX + 1];
 	int i = w32_backtrace (stack, BACKTRACE_LIMIT_MAX + 1);
+#ifdef CYGWIN
+	ptrdiff_t addr_offset = 0;
+#else   /* MinGW */
+	/* The offset below is zero unless ASLR is in effect.  */
+	ptrdiff_t addr_offset
+	  = DEFAULT_IMAGE_BASE - (ptrdiff_t)GetModuleHandle (NULL);
+#endif	/* MinGW */
 
 	if (i)
 	  {
@@ -11190,8 +11246,13 @@ emacs_abort (void)
 	      {
 		/* stack[] gives the return addresses, whereas we want
 		   the address of the call, so decrease each address
-		   by approximate size of 1 CALL instruction.  */
-		sprintf (buf, "%p\r\n", (char *)stack[j] - sizeof(void *));
+		   by approximate size of 1 CALL instruction.  We add
+		   ADDR_OFFSET to account for ASLR which changes the
+		   base address of the program's image in memory,
+		   whereas 'addr2line' needs to see addresses relative
+		   to the fixed base recorded in the PE header.  */
+		sprintf (buf, "%p\r\n",
+			 (char *)stack[j] - sizeof(void *) + addr_offset);
 		if (stderr_fd >= 0)
 		  write (stderr_fd, buf, strlen (buf));
 		if (errfile_fd >= 0)
@@ -11331,6 +11392,14 @@ see `w32-ansi-code-page'.  */);
 This variable is used for debugging, and takes precedence over any
 value of the `inhibit-double-buffering' frame parameter.  */);
   w32_disable_double_buffering = false;
+
+  DEFVAR_BOOL ("w32-follow-system-dark-mode", w32_follow_system_dark_mode,
+	       doc: /* Whether to follow the system's Dark mode on MS-Windows.
+If this is nil, Emacs on MS-Windows will not follow the system's Dark
+mode as far as the appearance of title bars and scroll bars is
+concerned, it will always use the default Light mode instead.
+Changing the value takes effect only for frames created after the change.  */);
+  w32_follow_system_dark_mode = true;
 
   if (os_subtype == OS_SUBTYPE_NT)
     w32_unicode_gui = 1;

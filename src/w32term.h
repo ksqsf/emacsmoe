@@ -1,5 +1,5 @@
 /* Definitions and headers for communication on the Microsoft Windows API.
-   Copyright (C) 1995, 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 1995, 2001-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -29,7 +29,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
    calls us.  The ALIGN_STACK attribute forces GCC to emit a preamble
    code to re-align the stack at function entry.  Further details
    about this can be found in
-   http://www.peterstock.co.uk/games/mingw_sse/.  */
+   https://www.peterstock.co.uk/games/mingw_sse/.  */
 #ifdef __GNUC__
 # if USE_STACK_LISP_OBJECTS && !defined _WIN64 && !defined __x86_64__	\
   && __GNUC__ + (__GNUC_MINOR__ > 1) >= 5

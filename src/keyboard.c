@@ -1,6 +1,6 @@
 /* Keyboard and mouse input; editor command loop.
 
-Copyright (C) 1985-1989, 1993-1997, 1999-2023 Free Software Foundation,
+Copyright (C) 1985-1989, 1993-1997, 1999-2024 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -44,6 +44,15 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "atimer.h"
 #include "process.h"
 #include "menu.h"
+
+#ifdef HAVE_TEXT_CONVERSION
+#include "textconv.h"
+#endif /* HAVE_TEXT_CONVERSION */
+
+#ifdef HAVE_ANDROID
+#include "android.h"
+#endif /* HAVE_ANDROID */
+
 #include <errno.h>
 
 #ifdef HAVE_PTHREAD
@@ -61,6 +70,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #endif
 
 #include "syssignal.h"
+
+#if defined HAVE_STACK_OVERFLOW_HANDLING && !defined WINDOWSNT
+#include <setjmp.h>
+#endif
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -102,8 +115,22 @@ static KBOARD *all_kboards;
 /* True in the single-kboard state, false in the any-kboard state.  */
 static bool single_kboard;
 
+#ifdef HAVE_TEXT_CONVERSION
+
+/* True if a key sequence is currently being read.  */
+bool reading_key_sequence;
+
+#endif /* HAVE_TEXT_CONVERSION */
+
 /* Minimum allowed size of the recent_keys vector.  */
 #define MIN_NUM_RECENT_KEYS (100)
+
+/* Maximum allowed size of the recent_keys vector.  */
+#if INTPTR_MAX <= INT_MAX
+# define MAX_NUM_RECENT_KEYS (INT_MAX / EMACS_INT_WIDTH / 10)
+#else
+# define MAX_NUM_RECENT_KEYS (INT_MAX / EMACS_INT_WIDTH)
+#endif
 
 /* Index for storing next element into recent_keys.  */
 static int recent_keys_index;
@@ -311,6 +338,8 @@ static Lisp_Object command_loop (void);
 static void echo_now (void);
 static ptrdiff_t echo_length (void);
 
+static void safe_run_hooks_maybe_narrowed (Lisp_Object, struct window *);
+
 /* Incremented whenever a timer is run.  */
 unsigned timers_run;
 
@@ -338,6 +367,10 @@ static struct timespec timer_last_idleness_start_time;
 
 static Lisp_Object virtual_core_pointer_name;
 static Lisp_Object virtual_core_keyboard_name;
+
+/* If not nil, ID of the last TOUCHSCREEN_END_EVENT to land on the
+   menu bar.  */
+static Lisp_Object menu_bar_touch_id;
 
 
 /* Global variable declarations.  */
@@ -547,7 +580,10 @@ echo_dash (void)
       idx = make_fixnum (SCHARS (KVAR (current_kboard, echo_string)) - 1);
       last_char = Faref (KVAR (current_kboard, echo_string), idx);
 
-      if (XFIXNUM (last_char) == '-' && XFIXNUM (prev_char) != ' ')
+      if ((XFIXNUM (last_char) == '-' && XFIXNUM (prev_char) != ' ')
+	  /* Or a keystroke help message.  */
+	  || (echo_keystrokes_help
+	      && XFIXNUM (last_char) == ')' && XFIXNUM (prev_char) == 'p'))
 	return;
     }
 
@@ -556,6 +592,12 @@ echo_dash (void)
   AUTO_STRING (dash, "-");
   kset_echo_string (current_kboard,
 		    concat2 (KVAR (current_kboard, echo_string), dash));
+
+  if (echo_keystrokes_help)
+    kset_echo_string (current_kboard,
+		      calln (Qhelp__append_keystrokes_help,
+			     KVAR (current_kboard, echo_string)));
+
   echo_now ();
 }
 
@@ -993,7 +1035,7 @@ cmd_error_internal (Lisp_Object data, const char *context)
 {
   /* The immediate context is not interesting for Quits,
      since they are asynchronous.  */
-  if (signal_quit_p (XCAR (data)))
+  if (signal_quit_p (data))
     Vsignaling_function = Qnil;
 
   Vquit_flag = Qnil;
@@ -1130,7 +1172,18 @@ command_loop_2 (Lisp_Object handlers)
 static Lisp_Object
 top_level_2 (void)
 {
-  return Feval (Vtop_level, Qnil);
+  /* If we're in batch mode, print a backtrace unconditionally when
+     encountering an error, to help with debugging.  */
+  bool setup_handler = noninteractive;
+  if (setup_handler)
+    /* FIXME: Should we (re)use `list_of_error` from `xdisp.c`? */
+    push_handler_bind (list1 (Qerror), Qdebug_early__handler, 0);
+
+  Lisp_Object res = Feval (Vtop_level, Qt);
+
+  if (setup_handler)
+    pop_handler ();
+  return res;
 }
 
 static Lisp_Object
@@ -1261,7 +1314,7 @@ some_mouse_moved (void)
 
 enum { READ_KEY_ELTS = 30 };
 static int read_key_sequence (Lisp_Object *, Lisp_Object,
-                              bool, bool, bool, bool);
+                              bool, bool, bool, bool, bool);
 static void adjust_point_for_property (ptrdiff_t, bool);
 
 static Lisp_Object
@@ -1322,7 +1375,6 @@ command_loop_1 (void)
 	display_malloc_warning ();
 
       Vdeactivate_mark = Qnil;
-      backtrace_yet = false;
 
       /* Don't ignore mouse movements for more than a single command
 	 loop.  (This flag is set in xdisp.c whenever the tool bar is
@@ -1372,7 +1424,8 @@ command_loop_1 (void)
       /* Read next key sequence; i gets its length.  */
       raw_keybuf_count = 0;
       Lisp_Object keybuf[READ_KEY_ELTS];
-      int i = read_key_sequence (keybuf, Qnil, false, true, true, false);
+      int i = read_key_sequence (keybuf, Qnil, false, true, true, false,
+				 false);
 
       /* A filter may have run while we were reading the input.  */
       if (! FRAME_LIVE_P (XFRAME (selected_frame)))
@@ -1427,6 +1480,7 @@ command_loop_1 (void)
       prev_buffer = current_buffer;
       prev_modiff = MODIFF;
       last_point_position = PT;
+      ptrdiff_t last_pt = PT;
 
       /* By default, we adjust point to a boundary of a region that
          has such a property that should be treated intangible
@@ -1504,6 +1558,9 @@ command_loop_1 (void)
             unbind_to (scount, Qnil);
 #endif
           }
+      /* Restore last PT position value, possibly clobbered by
+         recursive-edit invoked by the command we just executed.  */
+      last_point_position = last_pt;
       kset_last_prefix_arg (current_kboard, Vcurrent_prefix_arg);
 
       safe_run_hooks_maybe_narrowed (Qpost_command_hook,
@@ -1563,7 +1620,7 @@ command_loop_1 (void)
 	      if ((!NILP (Fwindow_system (Qnil))
 		   || ((symval =
 			find_symbol_value (Qtty_select_active_regions),
-			(!EQ (symval, Qunbound) && !NILP (symval)))
+			(!BASE_EQ (symval, Qunbound) && !NILP (symval)))
 		       && !NILP (Fterminal_parameter (Qnil,
 						      Qxterm__set_selection))))
 		  /* Even if mark_active is non-nil, the actual buffer
@@ -1643,7 +1700,8 @@ read_menu_command (void)
   specbind (Qecho_keystrokes, make_fixnum (0));
 
   Lisp_Object keybuf[READ_KEY_ELTS];
-  int i = read_key_sequence (keybuf, Qnil, false, true, true, true);
+  int i = read_key_sequence (keybuf, Qnil, false, true, true, true,
+			     false);
 
   unbind_to (count, Qnil);
 
@@ -1902,7 +1960,7 @@ safe_run_hooks (Lisp_Object hook)
   unbind_to (count, Qnil);
 }
 
-void
+static void
 safe_run_hooks_maybe_narrowed (Lisp_Object hook, struct window *w)
 {
   specpdl_ref count = SPECPDL_INDEX ();
@@ -1912,11 +1970,11 @@ safe_run_hooks_maybe_narrowed (Lisp_Object hook, struct window *w)
   if (current_buffer->long_line_optimizations_p
       && long_line_optimizations_region_size > 0)
     {
-      ptrdiff_t begv = get_locked_narrowing_begv (PT);
-      ptrdiff_t zv = get_locked_narrowing_zv (PT);
+      ptrdiff_t begv = get_large_narrowing_begv (PT);
+      ptrdiff_t zv = get_large_narrowing_zv (PT);
       if (begv != BEG || zv != Z)
-	narrow_to_region_locked (make_fixnum (begv), make_fixnum (zv),
-				 Qlong_line_optimizations_in_command_hooks);
+	labeled_narrow_to_region (make_fixnum (begv), make_fixnum (zv),
+				  Qlong_line_optimizations_in_command_hooks);
     }
 
   run_hook_with_args (2, ((Lisp_Object []) {hook, hook}),
@@ -2187,7 +2245,7 @@ show_help_echo (Lisp_Object help, Lisp_Object window, Lisp_Object object,
   if (!NILP (help) && !STRINGP (help))
     {
       if (FUNCTIONP (help))
-	help = safe_call (4, help, window, object, pos);
+	help = safe_calln (help, window, object, pos);
       else
 	help = safe_eval (help);
 
@@ -3013,6 +3071,7 @@ read_char (int commandflag, Lisp_Object map,
     {
       struct buffer *prev_buffer = current_buffer;
       last_input_event = c;
+
       call4 (Qcommand_execute, tem, Qnil, Fvector (1, &last_input_event), Qt);
 
       if (CONSP (c) && !NILP (Fmemq (XCAR (c), Vwhile_no_input_ignore_events))
@@ -3575,6 +3634,11 @@ readable_events (int flags)
     return 1;
 #endif
 
+#ifdef HAVE_TEXT_CONVERSION
+  if (detect_conversion_events ())
+    return 1;
+#endif
+
   if (!(flags & READABLE_EVENTS_IGNORE_SQUEEZABLES) && some_mouse_moved ())
     return 1;
   if (single_kboard)
@@ -3907,6 +3971,11 @@ kbd_buffer_get_event (KBOARD **kbp,
 
   had_pending_selection_requests = false;
 #endif
+#ifdef HAVE_TEXT_CONVERSION
+  bool had_pending_conversion_events;
+
+  had_pending_conversion_events = false;
+#endif
 
 #ifdef subprocesses
   if (kbd_on_hold_p () && kbd_buffer_nr_stored () < KBD_BUFFER_SIZE / 4)
@@ -3942,6 +4011,19 @@ kbd_buffer_get_event (KBOARD **kbp,
 	 events.  */
       if (CONSP (Vunread_command_events))
 	break;
+
+#ifdef HAVE_TEXT_CONVERSION
+      /* That text conversion events take priority over keyboard
+	 events, since input methods frequently send them immediately
+	 after edits, with the assumption that this order of events
+	 will be observed.  */
+
+      if (detect_conversion_events ())
+	{
+	  had_pending_conversion_events = true;
+	  break;
+	}
+#endif /* HAVE_TEXT_CONVERSION */
 
       if (kbd_fetch_ptr != kbd_store_ptr)
 	break;
@@ -4026,6 +4108,24 @@ kbd_buffer_get_event (KBOARD **kbp,
       return first;
     }
 
+#ifdef HAVE_TEXT_CONVERSION
+  /* There are pending text conversion operations.  Text conversion
+     events should be generated before processing any other keyboard
+     input.  */
+  if (had_pending_conversion_events)
+    {
+      handle_pending_conversion_events ();
+      obj = Qtext_conversion;
+
+      /* See the comment in handle_pending_conversion_events_1.
+         Note that in addition, text conversion events are not
+         generated if no edits were actually made.  */
+      if (conversion_disabled_p ()
+	  || NILP (Vtext_conversion_edits))
+	obj = Qnil;
+    }
+  else
+#endif
   /* At this point, we know that there is a readable event available
      somewhere.  If the event queue is empty, then there must be a
      mouse movement enabled and available.  */
@@ -4573,7 +4673,7 @@ timer_check_2 (Lisp_Object timers, Lisp_Object idle_timers)
     {
       Lisp_Object funcall = XCAR (pending_funcalls);
       pending_funcalls = XCDR (pending_funcalls);
-      safe_call2 (Qapply, XCAR (funcall), XCDR (funcall));
+      safe_calln (Qapply, XCAR (funcall), XCDR (funcall));
     }
 
   if (CONSP (timers) || CONSP (idle_timers))
@@ -4758,7 +4858,8 @@ The value when Emacs is idle is a Lisp timestamp in the style of
 
 The value when Emacs is not idle is nil.
 
-PSEC is a multiple of the system clock resolution.  */)
+If the value is a list of four integers (HIGH LOW USEC PSEC), then PSEC
+is a multiple of the system clock resolution.  */)
   (void)
 {
   if (timespec_valid_p (timer_idleness_start_time))
@@ -4910,7 +5011,88 @@ static const char *const lispy_accent_keys[] =
   "dead-horn",
 };
 
-#ifdef HAVE_NTGUI
+#ifdef HAVE_ANDROID
+#define FUNCTION_KEY_OFFSET 0
+
+/* Mind that Android designates 23 KEYCODE_DPAD_CENTER, but it is
+   merely abstruse terminology for the ``select'' key frequently
+   located in certain physical keyboards.  */
+
+const char *const lispy_function_keys[] =
+  {
+    /* All elements in this array default to 0, except for the few
+       function keys that Emacs recognizes.  */
+    [111] = "escape",
+    [112] = "delete",
+    [116] = "scroll",
+    [120] = "sysrq",
+    [121] = "break",
+    [122] = "home",
+    [123] = "end",
+    [124] = "insert",
+    [126] = "media-play",
+    [127] = "media-pause",
+    [130] = "media-record",
+    [131] = "f1",
+    [132] = "f2",
+    [133] = "f3",
+    [134] = "f4",
+    [135] = "f5",
+    [136] = "f6",
+    [137] = "f7",
+    [138] = "f8",
+    [139] = "f9",
+    [140] = "f10",
+    [141] = "f11",
+    [142] = "f12",
+    [143] = "kp-numlock",
+    [160] = "kp-ret",
+    [164] = "volume-mute",
+    [165] = "info",
+    [19]  = "up",
+    [20]  = "down",
+    [211] = "zenkaku-hankaku",
+    [213] = "muhenkan",
+    [214] = "henkan",
+    [215] = "hiragana-katakana",
+    [218] = "kana",
+    [21]  = "left",
+    [223] = "sleep",
+    [22]  = "right",
+    [23]  = "select",
+    [24]  = "volume-up",
+    [259] = "help",
+    [25]  = "volume-down",
+    [268] = "kp-up-left",
+    [269] = "kp-down-left",
+    [26]  = "power",
+    [270] = "kp-up-right",
+    [271] = "kp-down-right",
+    [272] = "media-skip-forward",
+    [273] = "media-skip-backward",
+    [277] = "cut",
+    [278] = "copy",
+    [279] = "paste",
+    [285] = "browser-refresh",
+    [28]  = "clear",
+    [300] = "XF86Forward",
+    [4]	  = "XF86Back",
+    [61]  = "tab",
+    [66]  = "return",
+    [67]  = "backspace",
+    [82]  = "menu",
+    [84]  = "find",
+    [85]  = "media-play-pause",
+    [86]  = "media-stop",
+    [87]  = "media-next",
+    [88]  = "media-previous",
+    [89]  = "media-rewind",
+    [92]  = "prior",
+    [93]  = "next",
+    [95]  = "mode-change",
+  };
+
+#elif defined HAVE_NTGUI
 #define FUNCTION_KEY_OFFSET 0x0
 
 const char *const lispy_function_keys[] =
@@ -5374,6 +5556,10 @@ static Lisp_Object button_down_location;
    the down mouse event.  */
 static Lisp_Object frame_relative_event_pos;
 
+/* The line-number display width, in columns, at the time of most
+   recent down mouse event.  */
+static int down_mouse_line_number_width;
+
 /* Information about the most recent up-going button event:  Which
    button, what location, and what time.  */
 
@@ -5400,9 +5586,10 @@ make_lispy_position (struct frame *f, Lisp_Object x, Lisp_Object y,
   /* Coordinate pixel positions to return.  */
   int xret = 0, yret = 0;
   /* The window or frame under frame pixel coordinates (x,y)  */
-  Lisp_Object window_or_frame = f
-    ? window_from_coordinates (f, mx, my, &part, true, true)
-    : Qnil;
+  Lisp_Object window_or_frame = (f != NULL
+				 ? window_from_coordinates (f, mx, my, &part,
+							    false, true, true)
+				 : Qnil);
 #ifdef HAVE_WINDOW_SYSTEM
   bool tool_bar_p = false;
   bool menu_bar_p = false;
@@ -5747,6 +5934,80 @@ coords_in_menu_bar_window (struct frame *f, int x, int y)
 
 #endif
 
+#ifdef HAVE_WINDOW_SYSTEM
+
+/* Return whether or not the coordinates X and Y are inside the
+   tab-bar window of the given frame F.  */
+
+static bool
+coords_in_tab_bar_window (struct frame *f, int x, int y)
+{
+  struct window *window;
+
+  if (!WINDOWP (f->tab_bar_window))
+    return false;
+
+  window = XWINDOW (f->tab_bar_window);
+
+  return (y >= WINDOW_TOP_EDGE_Y (window)
+	  && x >= WINDOW_LEFT_EDGE_X (window)
+	  && y <= WINDOW_BOTTOM_EDGE_Y (window)
+	  && x <= WINDOW_RIGHT_EDGE_X (window));
+}
+
+#endif /* HAVE_WINDOW_SYSTEM */
+
+static void
+save_line_number_display_width (struct input_event *event)
+{
+  struct window *w;
+  int pixel_width;
+
+  if (WINDOWP (event->frame_or_window))
+    w = XWINDOW (event->frame_or_window);
+  else if (FRAMEP (event->frame_or_window))
+    w = XWINDOW (XFRAME (event->frame_or_window)->selected_window);
+  else
+    w = XWINDOW (selected_window);
+  line_number_display_width (w, &down_mouse_line_number_width, &pixel_width);
+}
+
+/* Return non-zero if the change of position from START_POS to END_POS
+   is likely to be the effect of horizontal scrolling due to a change
+   in line-number width produced by redisplay between two mouse
+   events, like mouse-down followed by mouse-up, at those positions.
+   This is used to decide whether to converts mouse-down followed by
+   mouse-up event into a mouse-drag event.  */
+static bool
+line_number_mode_hscroll (Lisp_Object start_pos, Lisp_Object end_pos)
+{
+  if (!EQ (Fcar (start_pos), Fcar (end_pos)) /* different window */
+      || list_length (start_pos) < 7	     /* no COL/ROW info */
+      || list_length (end_pos) < 7)
+    return false;
+
+  Lisp_Object start_col_row = Fnth (make_fixnum (6), start_pos);
+  Lisp_Object end_col_row = Fnth (make_fixnum (6), end_pos);
+  Lisp_Object window = Fcar (end_pos);
+  int col_width, pixel_width;
+  Lisp_Object start_col, end_col;
+  struct window *w;
+  if (!WINDOW_VALID_P (window))
+    {
+      if (WINDOW_LIVE_P (window))
+	window = XFRAME (window)->selected_window;
+      else
+	window = selected_window;
+    }
+  w = XWINDOW (window);
+  line_number_display_width (w, &col_width, &pixel_width);
+  start_col = Fcar (start_col_row);
+  end_col = Fcar (end_col_row);
+  return EQ (start_col, end_col)
+	 && down_mouse_line_number_width >= 0
+	 && col_width != down_mouse_line_number_width;
+}
+
 /* Given a struct input_event, build the lisp event which represents
    it.  If EVENT is 0, build a mouse movement event from the mouse
    movement buffer, which should have a movement event in it.
@@ -6056,6 +6317,11 @@ make_lispy_event (struct input_event *event)
 			  }
 		      }
 
+		    /* Don't generate a menu bar event if ITEM is
+		       nil.  */
+		    if (NILP (item))
+		      return Qnil;
+
 		    /* ELisp manual 2.4b says (x y) are window
 		       relative but code says they are
 		       frame-relative.  */
@@ -6144,6 +6410,8 @@ make_lispy_event (struct input_event *event)
 	    *start_pos_ptr = Fcopy_alist (position);
 	    frame_relative_event_pos = Fcons (event->x, event->y);
 	    ignore_mouse_drag_p = false;
+	    /* Squirrel away the line-number width, if any.  */
+	    save_line_number_display_width (event);
 	  }
 
 	/* Now we're releasing a button - check the coordinates to
@@ -6189,12 +6457,18 @@ make_lispy_event (struct input_event *event)
 			  it's probably OK to ignore it as well.  */
 		       && (EQ (Fcar (Fcdr (start_pos)),
 			       Fcar (Fcdr (position))) /* Same buffer pos */
+			   /* Redisplay hscrolled text between down- and
+                              up-events due to display-line-numbers-mode.  */
+			   || line_number_mode_hscroll (start_pos, position)
 			   || !EQ (Fcar (start_pos),
 				   Fcar (position))))) /* Different window */
+
 		  {
 		    /* Mouse has moved enough.  */
 		    button_down_time = 0;
 		    click_or_drag_modifier = drag_modifier;
+		    /* Reset the value for future clicks.  */
+		    down_mouse_line_number_width = -1;
 		  }
 		else if (((!EQ (Fcar (start_pos), Fcar (position)))
 			  || (!EQ (Fcar (Fcdr (start_pos)),
@@ -6391,22 +6665,206 @@ make_lispy_event (struct input_event *event)
       }
 
     case TOUCHSCREEN_BEGIN_EVENT:
-    case TOUCHSCREEN_END_EVENT:
       {
 	Lisp_Object x, y, id, position;
-	struct frame *f = XFRAME (event->frame_or_window);
+	struct frame *f;
+#ifdef HAVE_WINDOW_SYSTEM
+	int tab_bar_item;
+	bool close;
+#endif /* HAVE_WINDOW_SYSTEM */
+
+	f = XFRAME (event->frame_or_window);
+
+	if (!FRAME_LIVE_P (f))
+	  return Qnil;
 
 	id = event->arg;
 	x = event->x;
 	y = event->y;
 
+#if defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR
+	if (coords_in_menu_bar_window (f, XFIXNUM (x), XFIXNUM (y)))
+	  {
+	    /* If the tap began in the menu bar window, then save the
+	       id.  */
+	    menu_bar_touch_id = id;
+	    return Qnil;
+	  }
+#endif /* defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR */
+
 	position = make_lispy_position (f, x, y, event->timestamp);
 
-	return list2 (((event->kind
-			== TOUCHSCREEN_BEGIN_EVENT)
-		       ? Qtouchscreen_begin
-		       : Qtouchscreen_end),
+#ifdef HAVE_WINDOW_SYSTEM
+
+	/* Now check if POSITION lies on the tab bar.  If so, look up
+	   the corresponding tab bar item's propertized string as the
+	   OBJECT.  */
+
+	if (coords_in_tab_bar_window (f, XFIXNUM (event->x),
+				      XFIXNUM (event->y))
+	    /* `get_tab_bar_item_kbd' returns 0 if the item was
+	       previously highlighted, 1 otherwise, and -1 if there is
+	       no tab bar item.  */
+	    && get_tab_bar_item_kbd (f, XFIXNUM (event->x),
+				     XFIXNUM (event->y), &tab_bar_item,
+				     &close) >= 0)
+	  {
+	    /* First, obtain the propertized string.  */
+	    x = Fcopy_sequence (AREF (f->tab_bar_items,
+				      (tab_bar_item
+				       + TAB_BAR_ITEM_CAPTION)));
+
+	    /* Next, add the key binding.  */
+	    AUTO_LIST2 (y, Qmenu_item, list3 (AREF (f->tab_bar_items,
+						    (tab_bar_item
+						     + TAB_BAR_ITEM_KEY)),
+					      AREF (f->tab_bar_items,
+						    (tab_bar_item
+						     + TAB_BAR_ITEM_BINDING)),
+					      close ? Qt : Qnil));
+
+	    /* And add the new properties to the propertized string.  */
+	    Fadd_text_properties (make_fixnum (0),
+				  make_fixnum (SCHARS (x)),
+				  y, x);
+
+	    /* Set the position to 0.  */
+	    x = Fcons (x, make_fixnum (0));
+
+	    /* Finally, add the OBJECT.  */
+	    position = nconc2 (position, Fcons (x, Qnil));
+	  }
+
+#endif /* HAVE_WINDOW_SYSTEM */
+
+	return list2 (Qtouchscreen_begin,
 		      Fcons (id, position));
+      }
+
+    case TOUCHSCREEN_END_EVENT:
+      {
+	Lisp_Object x, y, id, position;
+	struct frame *f = XFRAME (event->frame_or_window);
+#if defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR
+	int column, row, dummy;
+#endif /* defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR */
+#ifdef HAVE_WINDOW_SYSTEM
+	int tab_bar_item;
+	bool close;
+#endif /* HAVE_WINDOW_SYSTEM */
+
+	if (!FRAME_LIVE_P (f))
+	  return Qnil;
+
+	id = event->arg;
+	x = event->x;
+	y = event->y;
+
+#if defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR
+	if (EQ (menu_bar_touch_id, id))
+	  {
+	    /* This touch should activate the menu bar.  Generate the
+	       menu bar event.  */
+	    menu_bar_touch_id = Qnil;
+
+	    if (!NILP (f->menu_bar_window))
+	      {
+		x_y_to_hpos_vpos (XWINDOW (f->menu_bar_window), XFIXNUM (x),
+				  XFIXNUM (y), &column, &row, NULL, NULL,
+				  &dummy);
+
+		if (row >= 0 && row < FRAME_MENU_BAR_LINES (f))
+		  {
+		    Lisp_Object items, item;
+
+		    /* Find the menu bar item under `column'.  */
+		    item = Qnil;
+		    items = FRAME_MENU_BAR_ITEMS (f);
+		    for (i = 0; i < ASIZE (items); i += 4)
+		      {
+			Lisp_Object pos, string;
+			string = AREF (items, i + 1);
+			pos = AREF (items, i + 3);
+			if (NILP (string))
+			  break;
+			if (column >= XFIXNUM (pos)
+			    && column < XFIXNUM (pos) + SCHARS (string))
+			  {
+			    item = AREF (items, i);
+			    break;
+			  }
+		      }
+
+		    /* Don't generate a menu bar event if ITEM is
+		       nil.  */
+		    if (NILP (item))
+		      return Qnil;
+
+		    /* ELisp manual 2.4b says (x y) are window
+		       relative but code says they are
+		       frame-relative.  */
+		    position = list4 (event->frame_or_window,
+				      Qmenu_bar,
+				      Fcons (event->x, event->y),
+				      INT_TO_INTEGER (event->timestamp));
+
+		    return list2 (item, position);
+		  }
+	      }
+
+	    return Qnil;
+	  }
+#endif /* defined HAVE_WINDOW_SYSTEM && !defined HAVE_EXT_MENU_BAR */
+
+	position = make_lispy_position (f, x, y, event->timestamp);
+
+#ifdef HAVE_WINDOW_SYSTEM
+
+	/* Now check if POSITION lies on the tab bar.  If so, look up
+	   the corresponding tab bar item's propertized string as the
+	   OBJECT.  */
+
+	if (coords_in_tab_bar_window (f, XFIXNUM (event->x),
+				      XFIXNUM (event->y))
+	    /* `get_tab_bar_item_kbd' returns 0 if the item was
+	       previously highlighted, 1 otherwise, and -1 if there is
+	       no tab bar item.  */
+	    && get_tab_bar_item_kbd (f, XFIXNUM (event->x),
+				     XFIXNUM (event->y), &tab_bar_item,
+				     &close) >= 0)
+	  {
+	    /* First, obtain the propertized string.  */
+	    x = Fcopy_sequence (AREF (f->tab_bar_items,
+				      (tab_bar_item
+				       + TAB_BAR_ITEM_CAPTION)));
+
+	    /* Next, add the key binding.  */
+	    AUTO_LIST2 (y, Qmenu_item, list3 (AREF (f->tab_bar_items,
+						    (tab_bar_item
+						     + TAB_BAR_ITEM_KEY)),
+					      AREF (f->tab_bar_items,
+						    (tab_bar_item
+						     + TAB_BAR_ITEM_BINDING)),
+					      close ? Qt : Qnil));
+
+	    /* And add the new properties to the propertized string.  */
+	    Fadd_text_properties (make_fixnum (0),
+				  make_fixnum (SCHARS (x)),
+				  y, x);
+
+	    /* Set the position to 0.  */
+	    x = Fcons (x, make_fixnum (0));
+
+	    /* Finally, add the OBJECT.  */
+	    position = nconc2 (position, Fcons (x, Qnil));
+	  }
+
+#endif /* HAVE_WINDOW_SYSTEM */
+
+	position = make_lispy_position (f, x, y, event->timestamp);
+
+	return list3 (Qtouchscreen_end, Fcons (id, position),
+		      event->modifiers ? Qt : Qnil);
       }
 
     case PINCH_EVENT:
@@ -6431,6 +6889,9 @@ make_lispy_event (struct input_event *event)
 	struct frame *f = XFRAME (event->frame_or_window);
 	evt = Qnil;
 
+	if (!FRAME_LIVE_P (f))
+	  return Qnil;
+
 	for (tem = event->arg; CONSP (tem); tem = XCDR (tem))
 	  {
 	    it = XCAR (tem);
@@ -6439,9 +6900,18 @@ make_lispy_event (struct input_event *event)
 	    y = XCAR (XCDR (it));
 	    id = XCAR (XCDR (XCDR (it)));
 
+	    /* Don't report touches to the menu bar.  */
+	    if (EQ (id, menu_bar_touch_id))
+	      continue;
+
 	    position = make_lispy_position (f, x, y, event->timestamp);
 	    evt = Fcons (Fcons (id, position), evt);
 	  }
+
+	if (NILP (evt))
+	  /* Don't return an event if the touchpoint list is
+	     empty.  */
+	  return Qnil;
 
 	return list2 (Qtouchscreen_update, evt);
       }
@@ -7642,6 +8112,14 @@ tty_read_avail_input (struct terminal *terminal,
 static void
 handle_async_input (void)
 {
+#if defined HAVE_ANDROID && !defined ANDROID_STUBIFY
+  /* Check and respond to an ``urgent'' query from the UI thread.
+     A query becomes urgent once the UI thread has been waiting
+     for more than two seconds.  */
+
+  android_check_query_urgent ();
+#endif /* HAVE_ANDROID && !ANDROID_STUBIFY */
+
 #ifndef DOS_NT
   while (1)
     {
@@ -7710,6 +8188,16 @@ totally_unblock_input (void)
 void
 handle_input_available_signal (int sig)
 {
+#if defined HAVE_ANDROID && !defined ANDROID_STUBIFY
+  /* Make all writes from the Android UI thread visible.  If
+     `android_urgent_query' has been set, preceding writes to query
+     related variables should become observable here on as well.  */
+#if defined __aarch64__
+  asm ("dmb ishst");
+#else /* !defined __aarch64__ */
+  __atomic_thread_fence (__ATOMIC_SEQ_CST);
+#endif /* defined __aarch64__ */
+#endif /* HAVE_ANDROID && !ANDROID_STUBIFY */
   pending_signals = true;
 
   if (input_available_clear_time)
@@ -8140,7 +8628,7 @@ menu_item_eval_property_1 (Lisp_Object arg)
 {
   /* If we got a quit from within the menu computation,
      quit all the way out of it.  This takes care of C-] in the debugger.  */
-  if (CONSP (arg) && signal_quit_p (XCAR (arg)))
+  if (signal_quit_p (arg))
     quit ();
 
   return Qnil;
@@ -8603,7 +9091,7 @@ process_tab_bar_item (Lisp_Object key, Lisp_Object def, Lisp_Object data, void *
 }
 
 /* Access slot with index IDX of vector tab_bar_item_properties.  */
-#define PROP(IDX) AREF (tab_bar_item_properties, (IDX))
+#define PROP(IDX) AREF (tab_bar_item_properties, IDX)
 static void
 set_prop_tab_bar (ptrdiff_t idx, Lisp_Object val)
 {
@@ -8987,7 +9475,7 @@ process_tool_bar_item (Lisp_Object key, Lisp_Object def, Lisp_Object data, void 
 }
 
 /* Access slot with index IDX of vector tool_bar_item_properties.  */
-#define PROP(IDX) AREF (tool_bar_item_properties, (IDX))
+#define PROP(IDX) AREF (tool_bar_item_properties, IDX)
 static void
 set_prop (ptrdiff_t idx, Lisp_Object val)
 {
@@ -9039,7 +9527,13 @@ set_prop (ptrdiff_t idx, Lisp_Object val)
 
    - `:label LABEL-STRING'.
 
-   A text label to show with the tool bar button if labels are enabled.  */
+   A text label to show with the tool bar button if labels are
+   enabled.
+
+   - `:wrap WRAP'
+
+   WRAP specifies whether to hide this item but display subsequent
+   tool bar items on a new line.  */
 
 static bool
 parse_tool_bar_item (Lisp_Object key, Lisp_Object item)
@@ -9047,7 +9541,15 @@ parse_tool_bar_item (Lisp_Object key, Lisp_Object item)
   Lisp_Object filter = Qnil;
   Lisp_Object caption;
   int i;
-  bool have_label = false;
+  bool have_label;
+#ifndef HAVE_EXT_TOOL_BAR
+  bool is_wrap;
+#endif /* HAVE_EXT_TOOL_BAR */
+
+  have_label = false;
+#ifndef HAVE_EXT_TOOL_BAR
+  is_wrap = false;
+#endif /* HAVE_EXT_TOOL_BAR */
 
   /* Definition looks like `(menu-item CAPTION BINDING PROPS...)'.
      Rule out items that aren't lists, don't start with
@@ -9183,6 +9685,20 @@ parse_tool_bar_item (Lisp_Object key, Lisp_Object item)
       else if (EQ (ikey, QCrtl))
         /* ':rtl STRING' */
 	set_prop (TOOL_BAR_ITEM_RTL_IMAGE, value);
+      else if (EQ (ikey, QCwrap))
+	{
+#ifndef HAVE_EXT_TOOL_BAR
+	  /* This specifies whether the tool bar item should be hidden
+	     but cause subsequent items to be displayed on a new
+	     line.  */
+	  set_prop (TOOL_BAR_ITEM_WRAP, value);
+	  is_wrap = !NILP (value);
+#else /* HAVE_EXT_TOOL_BAR */
+	  /* Line wrapping isn't supported on builds utilizing
+	     external tool bars.  */
+	  return false;
+#endif /* !HAVE_EXT_TOOL_BAR */
+	}
     }
 
 
@@ -9242,6 +9758,15 @@ parse_tool_bar_item (Lisp_Object key, Lisp_Object item)
   /* See if the binding is a keymap.  Give up if it is.  */
   if (CONSP (get_keymap (PROP (TOOL_BAR_ITEM_BINDING), 0, 1)))
     return 0;
+
+
+#ifndef HAVE_EXT_TOOL_BAR
+  /* If the menu item is actually a line wrap, make sure it isn't
+     visible or enabled.  */
+
+  if (is_wrap)
+    set_prop (TOOL_BAR_ITEM_ENABLED_P, Qnil);
+#endif /* !HAVE_EXT_TOOL_BAR */
 
   /* If there is a key binding, add it to the help, which will be
      displayed as a tooltip for this entry. */
@@ -9664,13 +10189,18 @@ typedef struct keyremap
    If the mapping is a function and DO_FUNCALL is true,
    the function is called with PROMPT as parameter and its return
    value is used as the return value of this function (after checking
-   that it is indeed a vector).  */
+   that it is indeed a vector).
+
+   START and END are the indices of the first and last key of the
+   sequence being remapped within the keyboard buffer KEYBUF.  */
 
 static Lisp_Object
 access_keymap_keyremap (Lisp_Object map, Lisp_Object key, Lisp_Object prompt,
-			bool do_funcall)
+			bool do_funcall, unsigned int start, unsigned int end,
+			Lisp_Object *keybuf)
 {
   Lisp_Object next;
+  specpdl_ref count;
 
   next = access_keymap (map, key, 1, 0, 1);
 
@@ -9686,10 +10216,18 @@ access_keymap_keyremap (Lisp_Object map, Lisp_Object key, Lisp_Object prompt,
      its value instead.  */
   if (do_funcall && FUNCTIONP (next))
     {
-      Lisp_Object tem;
+      Lisp_Object tem, remap;
       tem = next;
 
-      next = call1 (next, prompt);
+      /* Build Vcurrent_key_remap_sequence.  */
+      remap = Fvector (end - start + 1, keybuf + start);
+
+      /* Bind `current-key-remap-sequence' to the key sequence being
+	 remapped.  */
+      count = SPECPDL_INDEX ();
+      specbind (Qcurrent_key_remap_sequence, remap);
+      next = unbind_to (count, call1 (next, prompt));
+
       /* If the function returned something invalid,
 	 barf--don't ignore it.  */
       if (! (NILP (next) || VECTORP (next) || STRINGP (next)))
@@ -9714,11 +10252,17 @@ keyremap_step (Lisp_Object *keybuf, volatile keyremap *fkey,
 	       int input, bool doit, int *diff, Lisp_Object prompt)
 {
   Lisp_Object next, key;
+  ptrdiff_t buf_start, buf_end;
+
+  /* Save the key sequence being translated.  */
+  buf_start = fkey->start;
+  buf_end = fkey->end;
 
   key = keybuf[fkey->end++];
 
   if (KEYMAPP (fkey->parent))
-    next = access_keymap_keyremap (fkey->map, key, prompt, doit);
+    next = access_keymap_keyremap (fkey->map, key, prompt, doit,
+				   buf_start, buf_end, keybuf);
   else
     next = Qnil;
 
@@ -9779,6 +10323,24 @@ void init_raw_keybuf_count (void)
   raw_keybuf_count = 0;
 }
 
+
+
+#ifdef HAVE_TEXT_CONVERSION
+
+static void
+restore_reading_key_sequence (int old_reading_key_sequence)
+{
+  reading_key_sequence = old_reading_key_sequence;
+
+  /* If a key sequence is no longer being read, reset input methods
+     whose state changes were postponed.  */
+
+  if (!old_reading_key_sequence)
+    check_postponed_buffers ();
+}
+
+#endif /* HAVE_TEXT_CONVERSION */
+
 /* Read a sequence of keys that ends with a non prefix character,
    storing it in KEYBUF, a buffer of size READ_KEY_ELTS.
    Prompt with PROMPT.
@@ -9817,12 +10379,16 @@ void init_raw_keybuf_count (void)
    read_char will return it.
 
    If FIX_CURRENT_BUFFER, we restore current_buffer
-   from the selected window's buffer.  */
+   from the selected window's buffer.
+
+   If DISABLE_TEXT_CONVERSION_P, disable text conversion so the input
+   method will always send key events.  */
 
 static int
 read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
 		   bool dont_downcase_last, bool can_return_switch_frame,
-		   bool fix_current_buffer, bool prevent_redisplay)
+		   bool fix_current_buffer, bool prevent_redisplay,
+		   bool disable_text_conversion_p)
 {
   specpdl_ref count = SPECPDL_INDEX ();
 
@@ -9887,6 +10453,13 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
   /* Gets around Microsoft compiler limitations.  */
   bool dummyflag = false;
 
+#ifdef HAVE_TEXT_CONVERSION
+  bool disabled_conversion;
+
+  /* Whether or not text conversion has already been disabled.  */
+  disabled_conversion = false;
+#endif /* HAVE_TEXT_CONVERSION */
+
   struct buffer *starting_buffer;
 
   /* List of events for which a fake prefix key has been generated.  */
@@ -9931,6 +10504,16 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
   keys_start = this_command_key_count;
   this_single_command_key_start = keys_start;
 
+#ifdef HAVE_TEXT_CONVERSION
+  /* Set `reading_key_sequence' to true.  This variable is used by
+     Fset_text_conversion_style to determine if it should postpone
+     resetting the input method until this function completes.  */
+
+  record_unwind_protect_int (restore_reading_key_sequence,
+			     reading_key_sequence);
+  reading_key_sequence = true;
+#endif /* HAVE_TEXT_CONVERSION */
+
   /* We jump here when we need to reinitialize fkey and keytran; this
      happens if we switch keyboards between rescans.  */
  replay_entire_sequence:
@@ -9968,6 +10551,18 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
   this_command_key_count = keys_start;
   if (INTERACTIVE && t < mock_input)
     echo_truncate (echo_start);
+
+  /* If text conversion is supposed to be disabled immediately, do it
+     now.  */
+
+#ifdef HAVE_TEXT_CONVERSION
+  if (disable_text_conversion_p)
+    {
+      disable_text_conversion ();
+      record_unwind_protect_void (resume_text_conversion);
+      disabled_conversion = true;
+    }
+#endif /* HAVE_TEXT_CONVERSION */
 
   /* If the best binding for the current key sequence is a keymap, or
      we may be looking at a function key's escape sequence, keep on
@@ -10035,6 +10630,43 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
       if (INTERACTIVE)
 	echo_local_start = echo_length ();
       keys_local_start = this_command_key_count;
+
+#ifdef HAVE_TEXT_CONVERSION
+      /* When reading a key sequence while text conversion is in
+	 effect, turn it off after the first actual character read.
+	 This makes input methods send actual key events instead.
+
+         Make sure only to do this once.  Also, disabling text
+         conversion seems to interact badly with menus, so don't
+         disable text conversion if a menu was displayed.  */
+
+      if (!disabled_conversion && t && !used_mouse_menu
+	  && !disable_inhibit_text_conversion)
+	{
+	  int i;
+
+	  /* used_mouse_menu isn't set if a menu bar prefix key has
+	     just been stored.  It appears necessary to look for a
+	     prefix key itself.  Don't look through too many keys for
+	     efficiency reasons.  */
+
+	  for (i = 0; i < min (t, 10); ++i)
+	    {
+	      if (NUMBERP (keybuf[i])
+		  || (SYMBOLP (keybuf[i])
+		      && EQ (Fget (keybuf[i], Qevent_kind),
+			     Qfunction_key)))
+		goto disable_text_conversion;
+	    }
+
+	  goto replay_key;
+
+	disable_text_conversion:
+	  disable_text_conversion ();
+	  record_unwind_protect_void (resume_text_conversion);
+	  disabled_conversion = true;
+	}
+#endif
 
     replay_key:
       /* These are no-ops, unless we throw away a keystroke below and
@@ -10263,7 +10895,7 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
       if (EVENT_HAS_PARAMETERS (key))
 	{
 	  Lisp_Object kind = EVENT_HEAD_KIND (EVENT_HEAD (key));
-	  if (EQ (kind, Qmouse_click))
+	  if (EQ (kind, Qmouse_click) || EQ (kind, Qtouchscreen))
 	    {
 	      Lisp_Object window = POSN_WINDOW (EVENT_START (key));
 	      Lisp_Object posn = POSN_POSN (EVENT_START (key));
@@ -10341,7 +10973,15 @@ read_key_sequence (Lisp_Object *keybuf, Lisp_Object prompt,
 	      posn = POSN_POSN (xevent_start (key));
 	      /* Handle menu-bar events:
 		 insert the dummy prefix event `menu-bar'.  */
-	      if (EQ (posn, Qmenu_bar) || EQ (posn, Qtab_bar) || EQ (posn, Qtool_bar))
+	      if ((EQ (posn, Qmenu_bar) || EQ (posn, Qtab_bar)
+		   || EQ (posn, Qtool_bar))
+		  /* Only insert the prefix key if the event comes
+		     directly from the keyboard buffer.  Key
+		     translation functions might return events with a
+		     `posn-area' of tool-bar or tab-bar without
+		     intending for these prefix events to be
+		     generated.  */
+		  && (mock_input <= t))
 		{
 		  if (READ_KEY_ELTS - t <= 1)
 		    error ("Key sequence too long");
@@ -10758,7 +11398,8 @@ static Lisp_Object
 read_key_sequence_vs (Lisp_Object prompt, Lisp_Object continue_echo,
 		      Lisp_Object dont_downcase_last,
 		      Lisp_Object can_return_switch_frame,
-		      Lisp_Object cmd_loop, bool allow_string)
+		      Lisp_Object cmd_loop, bool allow_string,
+		      bool disable_text_conversion)
 {
   specpdl_ref count = SPECPDL_INDEX ();
 
@@ -10785,7 +11426,8 @@ read_key_sequence_vs (Lisp_Object prompt, Lisp_Object continue_echo,
   raw_keybuf_count = 0;
   Lisp_Object keybuf[READ_KEY_ELTS];
   int i = read_key_sequence (keybuf, prompt, ! NILP (dont_downcase_last),
-			     ! NILP (can_return_switch_frame), false, false);
+			     ! NILP (can_return_switch_frame), false, false,
+			     disable_text_conversion);
 
 #if 0  /* The following is fine for code reading a key sequence and
 	  then proceeding with a lengthy computation, but it's not good
@@ -10807,7 +11449,7 @@ read_key_sequence_vs (Lisp_Object prompt, Lisp_Object continue_echo,
 		     (i, keybuf)));
 }
 
-DEFUN ("read-key-sequence", Fread_key_sequence, Sread_key_sequence, 1, 5, 0,
+DEFUN ("read-key-sequence", Fread_key_sequence, Sread_key_sequence, 1, 6, 0,
        doc: /* Read a sequence of keystrokes and return as a string or vector.
 The sequence is sufficient to specify a non-prefix command in the
 current local and global maps.
@@ -10853,20 +11495,31 @@ sequences, where they wouldn't conflict with ordinary bindings.  See
 The optional fifth argument CMD-LOOP, if non-nil, means
 that this key sequence is being read by something that will
 read commands one after another.  It should be nil if the caller
-will read just one key sequence.  */)
-  (Lisp_Object prompt, Lisp_Object continue_echo, Lisp_Object dont_downcase_last, Lisp_Object can_return_switch_frame, Lisp_Object cmd_loop)
+will read just one key sequence.
+
+The optional sixth argument DISABLE-TEXT-CONVERSION, if non-nil, means
+disable input method text conversion for the duration of reading this
+key sequence, and that keyboard input will always result in key events
+being sent.  */)
+  (Lisp_Object prompt, Lisp_Object continue_echo, Lisp_Object dont_downcase_last,
+   Lisp_Object can_return_switch_frame, Lisp_Object cmd_loop,
+   Lisp_Object disable_text_conversion)
 {
   return read_key_sequence_vs (prompt, continue_echo, dont_downcase_last,
-			       can_return_switch_frame, cmd_loop, true);
+			       can_return_switch_frame, cmd_loop, true,
+			       !NILP (disable_text_conversion));
 }
 
 DEFUN ("read-key-sequence-vector", Fread_key_sequence_vector,
-       Sread_key_sequence_vector, 1, 5, 0,
+       Sread_key_sequence_vector, 1, 6, 0,
        doc: /* Like `read-key-sequence' but always return a vector.  */)
-  (Lisp_Object prompt, Lisp_Object continue_echo, Lisp_Object dont_downcase_last, Lisp_Object can_return_switch_frame, Lisp_Object cmd_loop)
+  (Lisp_Object prompt, Lisp_Object continue_echo, Lisp_Object dont_downcase_last,
+   Lisp_Object can_return_switch_frame, Lisp_Object cmd_loop,
+   Lisp_Object disable_text_conversion)
 {
   return read_key_sequence_vs (prompt, continue_echo, dont_downcase_last,
-			       can_return_switch_frame, cmd_loop, false);
+			       can_return_switch_frame, cmd_loop, false,
+			       !NILP (disable_text_conversion));
 }
 
 /* Return true if input events are pending.  */
@@ -10984,10 +11637,10 @@ The saved keystrokes are shown by `view-lossage'.  */)
 
   if (!FIXNATP (arg))
     user_error ("Value must be a positive integer");
-  int osize = ASIZE (recent_keys);
+  ptrdiff_t osize = ASIZE (recent_keys);
   eassert (lossage_limit == osize);
   int min_size = MIN_NUM_RECENT_KEYS;
-  int new_size = XFIXNAT (arg);
+  EMACS_INT new_size = XFIXNAT (arg);
 
   if (new_size == osize)
     return make_fixnum (lossage_limit);
@@ -10996,6 +11649,12 @@ The saved keystrokes are shown by `view-lossage'.  */)
     {
       AUTO_STRING (fmt, "Value must be >= %d");
       Fsignal (Quser_error, list1 (CALLN (Fformat, fmt, make_fixnum (min_size))));
+    }
+  if (new_size > MAX_NUM_RECENT_KEYS)
+    {
+      AUTO_STRING (fmt, "Value must be <= %d");
+      Fsignal (Quser_error, list1 (CALLN (Fformat, fmt,
+					  make_fixnum (MAX_NUM_RECENT_KEYS))));
     }
 
   int kept_keys = new_size > osize ? total_keys : min (new_size, total_keys);
@@ -11101,8 +11760,8 @@ the command loop or by `read-key-sequence'.
 The value is always a vector.  */)
   (void)
 {
-  return Fvector (this_command_key_count
-		  - this_single_command_key_start,
+  ptrdiff_t nkeys = this_command_key_count - this_single_command_key_start;
+  return Fvector (nkeys < 0 ? 0 : nkeys,
 		  (XVECTOR (this_command_keys)->contents
 		   + this_single_command_key_start));
 }
@@ -11146,7 +11805,7 @@ DEFUN ("recursion-depth", Frecursion_depth, Srecursion_depth, 0, 0, 0,
   (void)
 {
   EMACS_INT sum;
-  INT_ADD_WRAPV (command_loop_level, minibuf_level, &sum);
+  ckd_add (&sum, command_loop_level, minibuf_level);
   return make_fixnum (sum);
 }
 
@@ -11169,7 +11828,7 @@ This may include sensitive information such as passwords.  */)
   if (dribble)
     {
       block_input ();
-      fclose (dribble);
+      emacs_fclose (dribble);
       unblock_input ();
       dribble = 0;
     }
@@ -11182,9 +11841,9 @@ This may include sensitive information such as passwords.  */)
       encfile = ENCODE_FILE (file);
       fd = emacs_open (SSDATA (encfile), O_WRONLY | O_CREAT | O_EXCL, 0600);
       if (fd < 0 && errno == EEXIST
-	  && (unlink (SSDATA (encfile)) == 0 || errno == ENOENT))
+	  && (emacs_unlink (SSDATA (encfile)) == 0 || errno == ENOENT))
 	fd = emacs_open (SSDATA (encfile), O_WRONLY | O_CREAT | O_EXCL, 0600);
-      dribble = fd < 0 ? 0 : fdopen (fd, "w");
+      dribble = fd < 0 ? 0 : emacs_fdopen (fd, "w");
       if (dribble == 0)
 	report_file_error ("Opening dribble", file);
     }
@@ -11546,7 +12205,7 @@ quit_throw_to_read_char (bool from_signal)
   if (FRAMEP (internal_last_event_frame)
       && !EQ (internal_last_event_frame, selected_frame))
     do_switch_frame (make_lispy_switch_frame (internal_last_event_frame),
-		     0, Qnil);
+		     0, 0, Qnil);
 
   sys_longjmp (getcjmp, 1);
 }
@@ -12068,7 +12727,10 @@ static const struct event_head head_table[] = {
   {SYMBOL_INDEX (Qmake_frame_visible),  SYMBOL_INDEX (Qmake_frame_visible)},
   /* `select-window' should be handled just like `switch-frame'
      in read_key_sequence.  */
-  {SYMBOL_INDEX (Qselect_window),       SYMBOL_INDEX (Qswitch_frame)}
+  {SYMBOL_INDEX (Qselect_window),       SYMBOL_INDEX (Qswitch_frame)},
+  /* Touchscreen events should be prefixed by the posn.  */
+  {SYMBOL_INDEX (Qtouchscreen_begin),	SYMBOL_INDEX (Qtouchscreen)},
+  {SYMBOL_INDEX (Qtouchscreen_end),	SYMBOL_INDEX (Qtouchscreen)},
 };
 
 static Lisp_Object
@@ -12144,6 +12806,7 @@ syms_of_keyboard (void)
   DEFSYM (Qhelp_echo, "help-echo");
   DEFSYM (Qhelp_echo_inhibit_substitution, "help-echo-inhibit-substitution");
   DEFSYM (QCrtl, ":rtl");
+  DEFSYM (QCwrap, ":wrap");
 
   staticpro (&item_properties);
   item_properties = Qnil;
@@ -12294,6 +12957,8 @@ syms_of_keyboard (void)
 
   DEFSYM (Qhelp_key_binding, "help-key-binding");
 
+  DEFSYM (Qhelp__append_keystrokes_help, "help--append-keystrokes-help");
+
   DEFSYM (Qecho_keystrokes, "echo-keystrokes");
 
   Fset (Qinput_method_exit_on_first_char, Qnil);
@@ -12413,6 +13078,9 @@ syms_of_keyboard (void)
 
   virtual_core_keyboard_name = Qnil;
   staticpro (&virtual_core_keyboard_name);
+
+  menu_bar_touch_id = Qnil;
+  staticpro (&menu_bar_touch_id);
 
   defsubr (&Scurrent_idle_time);
   defsubr (&Sevent_symbol_parse_modifiers);
@@ -12566,10 +13234,16 @@ Emacs also does a garbage collection if that seems to be warranted.  */);
   XSETFASTINT (Vauto_save_timeout, 30);
 
   DEFVAR_LISP ("echo-keystrokes", Vecho_keystrokes,
-	       doc: /* Nonzero means echo unfinished commands after this many seconds of pause.
+    doc: /* Nonzero means echo unfinished commands after this many seconds of pause.
 The value may be integer or floating point.
 If the value is zero, don't echo at all.  */);
   Vecho_keystrokes = make_fixnum (1);
+
+  DEFVAR_BOOL ("echo-keystrokes-help", echo_keystrokes_help,
+    doc: /* Whether to append help text to echoed commands.
+When non-nil, a reference to `C-h' is printed after echoed
+keystrokes.  */);
+  echo_keystrokes_help = true;
 
   DEFVAR_LISP ("polling-period", Vpolling_period,
 	      doc: /* Interval between polling for input during Lisp execution.
@@ -12773,6 +13447,10 @@ See also `pre-command-hook'.  */);
 	  "display-monitors-changed-functions");
 
   DEFSYM (Qcoding, "coding");
+  DEFSYM (Qtouchscreen, "touchscreen");
+#ifdef HAVE_TEXT_CONVERSION
+  DEFSYM (Qtext_conversion, "text-conversion");
+#endif
 
   Fset (Qecho_area_clear_hook, Qnil);
 
@@ -13147,8 +13825,24 @@ which see.  */);
   DEFVAR_LISP ("post-select-region-hook", Vpost_select_region_hook,
     doc: /* Abnormal hook run after the region is selected.
 This usually happens as a result of `select-active-regions'.  The hook
-is called with one argument, the string that was selected.  */);;
+is called with one argument, the string that was selected.  */);
   Vpost_select_region_hook = Qnil;
+
+  DEFVAR_BOOL ("disable-inhibit-text-conversion",
+	       disable_inhibit_text_conversion,
+    doc: /* Don't disable text conversion inside `read-key-sequence'.
+If non-nil, text conversion will continue to happen after a prefix
+key has been read inside `read-key-sequence'.  */);
+  disable_inhibit_text_conversion = false;
+
+  DEFVAR_LISP ("current-key-remap-sequence",
+	       Vcurrent_key_remap_sequence,
+    doc: /* The key sequence currently being remap, or nil.
+Bound to a vector containing the sub-sequence matching a binding
+within `input-decode-map' or `local-function-key-map' when its bound
+function is called to remap that sequence.  */);
+  Vcurrent_key_remap_sequence = Qnil;
+  DEFSYM (Qcurrent_key_remap_sequence, "current-key-remap-sequence");
 
   pdumper_do_now_and_after_load (syms_of_keyboard_for_pdumper);
 }

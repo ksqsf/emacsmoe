@@ -1,6 +1,6 @@
 ;;; spam.el --- Identifying spam  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2002-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2002-2024 Free Software Foundation, Inc.
 
 ;; Author: Lars Magne Ingebrigtsen <larsi@gnus.org>
 ;; Maintainer: Ted Zlatanov <tzz@lifelogs.com>
@@ -1375,8 +1375,7 @@ In the case of mover backends, checks the setting of
   (when (and (car-safe groups) (listp (car-safe groups)))
     (setq groups (pop groups)))
 
-  (unless (listp groups)
-    (setq groups (list groups)))
+  (setq groups (ensure-list groups))
 
     ;; remove the current process mark
   (gnus-summary-kill-process-mark)

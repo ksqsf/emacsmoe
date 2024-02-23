@@ -1,6 +1,6 @@
 ;;; viper-cmd.el --- Vi command support for Viper  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1997-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Kifer <kifer@cs.stonybrook.edu>
 ;; Package: viper
@@ -722,16 +722,12 @@ Vi's prefix argument will be used.  Otherwise, the prefix argument passed to
 	(let (viper-vi-kbd-minor-mode
 	      viper-insert-kbd-minor-mode
 	      viper-emacs-kbd-minor-mode)
-	  (unwind-protect
-	      (progn
-		(setq com
-		      (key-binding (setq key (read-key-sequence nil))))
-		;; In case of binding indirection--chase definitions.
-		;; Have to do it here because we execute this command under
-		;; different keymaps, so command-execute may not do the
-		;; right thing there
-		(while (vectorp com) (setq com (key-binding com))))
-	    nil)
+	  (setq com (key-binding (setq key (read-key-sequence nil))))
+	  ;; In case of binding indirection--chase definitions.
+	  ;; Have to do it here because we execute this command under
+	  ;; different keymaps, so command-execute may not do the
+	  ;; right thing there
+	  (while (vectorp com) (setq com (key-binding com)))
 	  ;; Execute command com in the original Viper state, not in state
 	  ;; `state'.  Otherwise, if we switch buffers while executing the
 	  ;; escaped to command, Viper's mode vars will remain those of
@@ -1950,16 +1946,16 @@ To turn this feature off, set this variable to nil."
 	  (if found
 	      ()
 	    (viper-tmp-insert-at-eob " [Please complete file name]")
-	    (unwind-protect
-		(while (not (memq cmd
-				  '(exit-minibuffer viper-exit-minibuffer)))
-		  (setq cmd
-			(key-binding (setq key (read-key-sequence nil))))
-		  (cond ((eq cmd 'self-insert-command)
-			 (insert key))
-			((memq cmd '(exit-minibuffer viper-exit-minibuffer))
-			 nil)
-			(t (command-execute cmd))))))))))
+
+	    (while (not (memq cmd
+			      '(exit-minibuffer viper-exit-minibuffer)))
+	      (setq cmd
+		    (key-binding (setq key (read-key-sequence nil))))
+	      (cond ((eq cmd 'self-insert-command)
+		     (insert key))
+		    ((memq cmd '(exit-minibuffer viper-exit-minibuffer))
+		     nil)
+		    (t (command-execute cmd)))))))))
 
 
 (defun viper-minibuffer-trim-tail ()
@@ -4641,7 +4637,7 @@ sensitive for VI-style look-and-feel."
 	(insert (substitute-command-keys "
 Please specify your level of familiarity with the venomous VI PERil
 \(and the VI Plan for Emacs Rescue).
-You can change it at any time by typing `\\[viper-set-expert-level]'
+You can change it at any time by typing \\[viper-set-expert-level]
 
  1 -- BEGINNER: Almost all Emacs features are suppressed.
        Feels almost like straight Vi.  File name completion and
@@ -4728,15 +4724,15 @@ Please, specify your level now: "))
 (defun viper-submit-report ()
   "Submit bug report on Viper."
   (interactive)
-  (defvar x-display-color-p)
+  (defvar display-color-p)
   (defvar viper-frame-parameters)
   (defvar viper-minibuffer-emacs-face)
   (defvar viper-minibuffer-vi-face)
   (defvar viper-minibuffer-insert-face)
   (let ((reporter-prompt-for-summary-p t)
-        (x-display-color-p (if (viper-window-display-p)
-                              (x-display-color-p)
-                             'non-x))
+        (display-color-p (if (viper-window-display-p)
+                             (display-color-p)
+                           'non-x))
         (viper-frame-parameters (frame-parameters (selected-frame)))
 	(viper-minibuffer-emacs-face (if (viper-has-face-support-p)
                                          (facep
@@ -4794,7 +4790,7 @@ Please, specify your level now: "))
 		        'viper-expert-level
 		        'major-mode
 		        'window-system
-                        'x-display-color-p
+                        'display-color-p
 			'viper-frame-parameters
 			'viper-minibuffer-vi-face
 			'viper-minibuffer-insert-face

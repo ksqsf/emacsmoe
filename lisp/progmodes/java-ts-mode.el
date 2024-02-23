@@ -1,6 +1,6 @@
 ;;; java-ts-mode.el --- tree-sitter support for Java  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2024 Free Software Foundation, Inc.
 
 ;; Author     : Theodor Thornhill <theo@thornhill.no>
 ;; Maintainer : Theodor Thornhill <theo@thornhill.no>
@@ -36,6 +36,8 @@
 (declare-function treesit-node-start "treesit.c")
 (declare-function treesit-node-type "treesit.c")
 (declare-function treesit-node-child-by-field-name "treesit.c")
+(declare-function treesit-node-child-by-field-name "treesit.c")
+(declare-function treesit-query-capture "treesit.c")
 
 (defcustom java-ts-mode-indent-offset 4
   "Number of spaces for each indentation step in `java-ts-mode'."
@@ -69,10 +71,10 @@
 
 (defvar java-ts-mode--indent-rules
   `((java
-     ((parent-is "program") point-min 0)
+     ((parent-is "program") column-0 0)
      ((match "}" "element_value_array_initializer")
       parent-bol 0)
-     ((node-is "}") point-min c-ts-common-statement-offset)
+     ((node-is "}") column-0 c-ts-common-statement-offset)
      ((node-is ")") parent-bol 0)
      ((node-is "else") parent-bol 0)
      ((node-is "]") parent-bol 0)
@@ -80,15 +82,15 @@
       c-ts-common-comment-start-after-first-star -1)
      ((parent-is "comment") prev-adaptive-prefix 0)
      ((parent-is "text_block") no-indent)
-     ((parent-is "class_body") point-min c-ts-common-statement-offset)
+     ((parent-is "class_body") column-0 c-ts-common-statement-offset)
      ((parent-is "array_initializer") parent-bol java-ts-mode-indent-offset)
-     ((parent-is "annotation_type_body") point-min c-ts-common-statement-offset)
-     ((parent-is "interface_body") point-min c-ts-common-statement-offset)
-     ((parent-is "constructor_body") point-min c-ts-common-statement-offset)
+     ((parent-is "annotation_type_body") column-0 c-ts-common-statement-offset)
+     ((parent-is "interface_body") column-0 c-ts-common-statement-offset)
+     ((parent-is "constructor_body") column-0 c-ts-common-statement-offset)
      ((parent-is "enum_body_declarations") parent-bol 0)
-     ((parent-is "enum_body") point-min c-ts-common-statement-offset)
-     ((parent-is "switch_block") point-min c-ts-common-statement-offset)
-     ((parent-is "record_declaration_body") point-min c-ts-common-statement-offset)
+     ((parent-is "enum_body") column-0 c-ts-common-statement-offset)
+     ((parent-is "switch_block") column-0 c-ts-common-statement-offset)
+     ((parent-is "record_declaration_body") column-0 c-ts-common-statement-offset)
      ((query "(method_declaration (block _ @indent))") parent-bol java-ts-mode-indent-offset)
      ((query "(method_declaration (block (_) @indent))") parent-bol java-ts-mode-indent-offset)
      ((parent-is "local_variable_declaration") parent-bol java-ts-mode-indent-offset)
@@ -97,6 +99,8 @@
      ((parent-is "field_declaration") parent-bol java-ts-mode-indent-offset)
      ((parent-is "return_statement") parent-bol java-ts-mode-indent-offset)
      ((parent-is "variable_declarator") parent-bol java-ts-mode-indent-offset)
+     ((match ">" "type_arguments") parent-bol 0)
+     ((parent-is "type_arguments") parent-bol java-ts-mode-indent-offset)
      ((parent-is "method_invocation") parent-bol java-ts-mode-indent-offset)
      ((parent-is "switch_rule") parent-bol java-ts-mode-indent-offset)
      ((parent-is "switch_label") parent-bol java-ts-mode-indent-offset)
@@ -121,7 +125,7 @@
      ((parent-is "case_statement") parent-bol java-ts-mode-indent-offset)
      ((parent-is "labeled_statement") parent-bol java-ts-mode-indent-offset)
      ((parent-is "do_statement") parent-bol java-ts-mode-indent-offset)
-     ((parent-is "block") point-min c-ts-common-statement-offset)))
+     ((parent-is "block") column-0 c-ts-common-statement-offset)))
   "Tree-sitter indent rules.")
 
 (defvar java-ts-mode--keywords
@@ -145,6 +149,16 @@
     "|=" "~" ">>" ">>>" "<<" "::" "?" "&=")
   "Java operators for tree-sitter font-locking.")
 
+(defun java-ts-mode--string-highlight-helper ()
+"Returns, for strings, a query based on what is supported by
+the available version of Tree-sitter for java."
+  (condition-case nil
+      (progn (treesit-query-capture 'java '((text_block) @font-lock-string-face))
+	     `((string_literal) @font-lock-string-face
+	       (text_block) @font-lock-string-face))
+    (error
+     `((string_literal) @font-lock-string-face))))
+
 (defvar java-ts-mode--font-lock-settings
   (treesit-font-lock-rules
    :language 'java
@@ -156,7 +170,7 @@
    :override t
    :feature 'constant
    `(((identifier) @font-lock-constant-face
-      (:match "^[A-Z_][A-Z_\\d]*$" @font-lock-constant-face))
+      (:match "\\`[A-Z_][0-9A-Z_]*\\'" @font-lock-constant-face))
      [(true) (false)] @font-lock-constant-face)
    :language 'java
    :override t
@@ -182,8 +196,7 @@
    :language 'java
    :override t
    :feature 'string
-   `((string_literal) @font-lock-string-face
-     (text_block) @font-lock-string-face)
+   (java-ts-mode--string-highlight-helper)
    :language 'java
    :override t
    :feature 'literal
@@ -215,6 +228,9 @@
      (constructor_declaration
       name: (identifier) @font-lock-type-face)
 
+     (compact_constructor_declaration
+      name: (identifier) @font-lock-type-face)
+
      (field_access
       object: (identifier) @font-lock-type-face)
 
@@ -223,7 +239,7 @@
      (scoped_identifier (identifier) @font-lock-constant-face)
 
      ((scoped_identifier name: (identifier) @font-lock-type-face)
-      (:match "^[A-Z]" @font-lock-type-face))
+      (:match "\\`[A-Z]" @font-lock-type-face))
 
      (type_identifier) @font-lock-type-face
 
@@ -289,6 +305,13 @@ Return nil if there is no name or if NODE is not a defun node."
       (treesit-node-child-by-field-name node "name")
       t))))
 
+
+(defvar java-ts-mode--feature-list
+  '(( comment definition )
+    ( constant keyword string type)
+    ( annotation expression literal)
+    ( bracket delimiter operator)))
+
 ;;;###autoload
 (define-derived-mode java-ts-mode prog-mode "Java"
   "Major mode for editing Java, powered by tree-sitter."
@@ -302,11 +325,6 @@ Return nil if there is no name or if NODE is not a defun node."
 
   ;; Comments.
   (c-ts-common-comment-setup)
-
-  (setq-local treesit-text-type-regexp
-              (regexp-opt '("line_comment"
-                            "block_comment"
-                            "text_block")))
 
   ;; Indent.
   (setq-local c-ts-common-indent-type-regexp-alist
@@ -346,36 +364,34 @@ Return nil if there is no name or if NODE is not a defun node."
                             "constructor_declaration")))
   (setq-local treesit-defun-name-function #'java-ts-mode--defun-name)
 
-  (setq-local treesit-sentence-type-regexp
-              (regexp-opt '("statement"
-                            "local_variable_declaration"
-                            "field_declaration"
-                            "module_declaration"
-                            "package_declaration"
-                            "import_declaration")))
-
-  (setq-local treesit-sexp-type-regexp
-              (regexp-opt '("annotation"
-                            "parenthesized_expression"
-                            "argument_list"
-                            "identifier"
-                            "modifiers"
-                            "block"
-                            "body"
-                            "literal"
-                            "access"
-                            "reference"
-                            "_type"
-                            "true"
-                            "false")))
+  (setq-local treesit-thing-settings
+              `((java
+                (sexp ,(rx (or "annotation"
+                               "parenthesized_expression"
+                               "argument_list"
+                               "identifier"
+                               "modifiers"
+                               "block"
+                               "body"
+                               "literal"
+                               "access"
+                               "reference"
+                               "_type"
+                               "true"
+                               "false")))
+                (sentence ,(rx (or "statement"
+                                   "local_variable_declaration"
+                                   "field_declaration"
+                                   "module_declaration"
+                                   "package_declaration"
+                                   "import_declaration")))
+                (text ,(regexp-opt '("line_comment"
+                                     "block_comment"
+                                     "text_block"))))))
 
   ;; Font-lock.
   (setq-local treesit-font-lock-settings java-ts-mode--font-lock-settings)
-  (setq-local treesit-font-lock-feature-list
-              '(( comment definition )
-                ( constant keyword string type)
-                ( annotation expression literal)
-                ( bracket delimiter operator)))
+  (setq-local treesit-font-lock-feature-list java-ts-mode--feature-list)
 
   ;; Imenu.
   (setq-local treesit-simple-imenu-settings

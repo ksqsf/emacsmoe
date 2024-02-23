@@ -1,6 +1,6 @@
 ;;; byte-opt.el --- the optimization passes of the emacs-lisp byte compiler -*- lexical-binding: t -*-
 
-;; Copyright (C) 1991, 1994, 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1991, 1994, 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Jamie Zawinski <jwz@lucid.com>
 ;;	Hallvard Furuseth <hbf@ulrik.uio.no>
@@ -167,8 +167,8 @@ Earlier variables shadow later ones with the same name.")
       ((or `(lambda . ,_) `(closure . ,_))
        ;; While byte-compile-unfold-bcf can inline dynbind byte-code into
        ;; letbind byte-code (or any other combination for that matter), we
-       ;; can only inline dynbind source into dynbind source or letbind
-       ;; source into letbind source.
+       ;; can only inline dynbind source into dynbind source or lexbind
+       ;; source into lexbind source.
        ;; When the function comes from another file, we byte-compile
        ;; the inlined function first, and then inline its byte-code.
        ;; This also has the advantage that the final code does not
@@ -176,7 +176,10 @@ Earlier variables shadow later ones with the same name.")
        ;; the build more reproducible.
        (if (eq fn localfn)
            ;; From the same file => same mode.
-           (macroexp--unfold-lambda `(,fn ,@(cdr form)))
+           (let* ((newform `(,fn ,@(cdr form)))
+                  (unfolded (macroexp--unfold-lambda newform)))
+             ;; Use the newform only if it could be optimized.
+             (if (eq unfolded newform) form unfolded))
          ;; Since we are called from inside the optimizer, we need to make
          ;; sure not to propagate lexvar values.
          (let ((byte-optimize--lexvars nil)
@@ -214,28 +217,24 @@ This indicates the loop discovery phase.")
 
 (defvar byte-optimize--aliased-vars nil
   "List of variables which may be aliased by other lexical variables.
-If an entry in `byte-optimize--lexvars' has another variable as its VALUE,
-then that other variable must be in this list.
-This variable thus carries no essential information but is maintained
-for speeding up processing.")
+Each element is (NAME . ALIAS) where NAME is the aliased variable
+and ALIAS the variable record (in the format described for
+`byte-optimize--lexvars') for an alias, which may have NAME as its VALUE.
+There can be multiple entries for the same NAME if it has several aliases.")
 
 (defun byte-optimize--substitutable-p (expr)
   "Whether EXPR is a constant that can be propagated."
-  ;; Only consider numbers, symbols and strings to be values for substitution
-  ;; purposes.  Numbers and symbols are immutable, and mutating string
-  ;; literals (or results from constant-evaluated string-returning functions)
-  ;; can be considered undefined.
-  ;; (What about other quoted values, like conses?)
   (or (booleanp expr)
       (numberp expr)
-      (stringp expr)
-      (and (consp expr)
-           (or (and (memq (car expr) '(quote function))
-                    (symbolp (cadr expr)))
-               ;; (internal-get-closed-var N) can be considered constant for
-               ;; const-prop purposes.
-               (and (eq (car expr) 'internal-get-closed-var)
-                    (integerp (cadr expr)))))
+      (arrayp expr)
+      (let ((head (car-safe expr)))
+        (cond ((eq head 'quote) t)
+              ;; Don't substitute #'(lambda ...) since that would enable
+              ;; uncontrolled inlining.
+              ((eq head 'function) (symbolp (cadr expr)))
+              ;; (internal-get-closed-var N) can be considered constant for
+              ;; const-prop purposes.
+              ((eq head 'internal-get-closed-var) (integerp (cadr expr)))))
       (keywordp expr)))
 
 (defmacro byte-optimize--pcase (exp &rest cases)
@@ -441,7 +440,7 @@ for speeding up processing.")
 
       (`(unwind-protect ,protected-expr :fun-body ,unwind-fun)
        ;; FIXME: The return value of UNWIND-FUN is never used so we
-       ;; could potentially optimise it for-effect, but we don't do
+       ;; could potentially optimize it for-effect, but we don't do
        ;; that right no.
        `(,fn ,(byte-optimize-form protected-expr for-effect)
              :fun-body ,(byte-optimize-form unwind-fun)))
@@ -451,27 +450,10 @@ for speeding up processing.")
           . ,(byte-optimize-body exps for-effect)))
 
       ;; Needed as long as we run byte-optimize-form after cconv.
-      (`(internal-make-closure . ,_)
-       (and (not for-effect)
-            (progn
-       ;; Look up free vars and mark them to be kept, so that they
-       ;; won't be optimized away.
-       (dolist (var (caddr form))
-         (let ((lexvar (assq var byte-optimize--lexvars)))
-           (when lexvar
-             (setcar (cdr lexvar) t))))
-              form)))
-
-      (`((lambda . ,_) . ,_)
-       (let ((newform (macroexp--unfold-lambda form)))
-	 (if (eq newform form)
-	     ;; Some error occurred, avoid infinite recursion.
-	     form
-	   (byte-optimize-form newform for-effect))))
-
-      ;; FIXME: Strictly speaking, I think this is a bug: (closure...)
-      ;; is a *value* and shouldn't appear in the car.
-      (`((closure . ,_) . ,_) form)
+      (`(internal-make-closure ,vars ,env . ,rest)
+       (if for-effect
+           `(progn ,@(byte-optimize-body env t))
+         `(,fn ,vars ,(mapcar #'byte-optimize-form env) . ,rest)))
 
       (`(setq ,var ,expr)
        (let ((lexvar (assq var byte-optimize--lexvars))
@@ -480,13 +462,17 @@ for speeding up processing.")
            (setcar (cdr lexvar) t)    ; Mark variable to be kept.
            (setcdr (cdr lexvar) nil)  ; Inhibit further substitution.
 
-           (when (memq var byte-optimize--aliased-vars)
-             ;; Cancel aliasing of variables aliased to this one.
-             (dolist (v byte-optimize--lexvars)
-               (when (eq (nth 2 v) var)
-                 ;; V is bound to VAR but VAR is now mutated:
-                 ;; cancel aliasing.
-                 (setcdr (cdr v) nil)))))
+           ;; Cancel substitution of variables aliasing this one.
+           (let ((aliased-vars byte-optimize--aliased-vars))
+             (while
+                 (let ((alias (assq var aliased-vars)))
+                   (and alias
+                        (progn
+                          ;; Found a variable bound to VAR but VAR is
+                          ;; now mutated; cancel aliasing.
+                          (setcdr (cddr alias) nil)
+                          (setq aliased-vars (cdr (memq alias aliased-vars)))
+                          t))))))
          `(,fn ,var ,value)))
 
       (`(defvar ,(and (pred symbolp) name) . ,rest)
@@ -499,20 +485,10 @@ for speeding up processing.")
       (`(,(pred byte-code-function-p) . ,exps)
        (cons fn (mapcar #'byte-optimize-form exps)))
 
-      (`(,(pred (not symbolp)) . ,_)
-       (byte-compile-warn-x fn "`%s' is a malformed function" fn)
-       form)
-
       ((guard (when for-effect
 		(if-let ((tmp (byte-opt--fget fn 'side-effect-free)))
 		    (or byte-compile-delete-errors
-		        (eq tmp 'error-free)
-		        (progn
-			  (byte-compile-warn-x
-                           form
-                           "value returned from %s is unused"
-			   form)
-			  nil)))))
+		        (eq tmp 'error-free)))))
        (byte-compile-log "  %s called for effect; deleted" fn)
        (byte-optimize-form (cons 'progn (cdr form)) t))
 
@@ -611,7 +587,6 @@ for speeding up processing.")
       (let* ((byte-optimize--lexvars byte-optimize--lexvars)
              (byte-optimize--aliased-vars byte-optimize--aliased-vars)
              (new-lexvars nil)
-             (new-aliased-vars nil)
              (let-vars nil)
              (body (cdr form))
              (bindings (car form)))
@@ -621,7 +596,7 @@ for speeding up processing.")
                  (expr (byte-optimize-form (cadr binding) nil)))
             (setq bindings (cdr bindings))
             (when (and (eq head 'let*)
-                       (memq name byte-optimize--aliased-vars))
+                       (assq name byte-optimize--aliased-vars))
               ;; New variable shadows an aliased variable -- α-rename
               ;; it in this and all subsequent bindings.
               (let ((new-name (make-symbol (symbol-name name))))
@@ -634,14 +609,12 @@ for speeding up processing.")
                               bindings))
                 (setq body (byte-optimize--rename-var-body name new-name body))
                 (setq name new-name)))
-            (let* ((aliased nil)
-                   (value (and
-                           (or (byte-optimize--substitutable-p expr)
-                               ;; Aliasing another lexvar.
-                               (setq aliased
-                                     (and (symbolp expr)
-                                          (assq expr byte-optimize--lexvars))))
-                           (list expr)))
+            (let* ((aliased
+                    ;; Aliasing another lexvar.
+                    (and (symbolp expr) (assq expr byte-optimize--lexvars)))
+                   (value (and (or aliased
+                                   (byte-optimize--substitutable-p expr))
+                               (list expr)))
                    (lexical (not (or (special-variable-p name)
                                      (memq name byte-compile-bound-variables)
                                      (memq name byte-optimize--dynamic-vars))))
@@ -650,20 +623,16 @@ for speeding up processing.")
               (when lexinfo
                 (push lexinfo (if (eq head 'let*)
                                   byte-optimize--lexvars
-                                new-lexvars)))
-              (when aliased
-                (push expr (if (eq head 'let*)
-                               byte-optimize--aliased-vars
-                             new-aliased-vars))))))
+                                new-lexvars))
+                (when aliased
+                  (push (cons expr lexinfo) byte-optimize--aliased-vars))))))
 
-        (setq byte-optimize--aliased-vars
-              (append new-aliased-vars byte-optimize--aliased-vars))
         (when (and (eq head 'let) byte-optimize--aliased-vars)
           ;; Find new variables that shadow aliased variables.
           (let ((shadowing-vars nil))
             (dolist (lexvar new-lexvars)
               (let ((name (car lexvar)))
-                (when (and (memq name byte-optimize--aliased-vars)
+                (when (and (assq name byte-optimize--aliased-vars)
                            (not (memq name shadowing-vars)))
                   (push name shadowing-vars))))
             ;; α-rename them
@@ -810,6 +779,17 @@ for speeding up processing.")
                            make-marker copy-marker point-marker mark-marker
                            set-marker
                            kbd key-description
+                           skip-chars-forward skip-chars-backward
+                           skip-syntax-forward skip-syntax-backward
+                           current-column current-indentation
+                           char-syntax syntax-class-to-char
+                           parse-partial-sexp goto-char forward-line
+                           next-window previous-window minibuffer-window
+                           selected-frame selected-window
+                           standard-case-table standard-syntax-table
+                           syntax-table
+                           frame-first-window frame-root-window
+                           frame-selected-window
                            always))
                   t)
                  ((eq head 'if)
@@ -830,8 +810,29 @@ for speeding up processing.")
   (or (not form)   ; assume (quote nil) always being normalized to nil
       (and (consp form)
            (let ((head (car form)))
-             ;; FIXME: There are many other expressions that are statically nil.
-             (cond ((memq head '(while ignore)) t)
+             (cond ((memq head
+                          ;; Some forms that are statically nil.
+                          ;; FIXME: Replace with a function property?
+                          '( while ignore
+                             insert insert-and-inherit insert-before-markers
+                             insert-before-markers-and-inherit
+                             insert-char insert-byte insert-buffer-substring
+                             delete-region delete-char
+                             widen narrow-to-region transpose-regions
+                             forward-char backward-char
+                             beginning-of-line end-of-line
+                             erase-buffer buffer-swap-text
+                             delete-overlay delete-all-overlays
+                             remhash
+                             maphash
+                             map-charset-chars map-char-table
+                             mapbacktrace
+                             mapatoms
+                             ding beep sleep-for
+                             json-insert
+                             set-match-data
+                             ))
+                    t)
                    ((eq head 'if)
                     (and (byte-compile-nilconstp (nth 2 form))
                          (byte-compile-nilconstp (car (last (cdddr form))))))
@@ -893,7 +894,13 @@ for speeding up processing.")
   (cons accum args))
 
 (defun byte-optimize-plus (form)
-  (let ((args (remq 0 (byte-opt--arith-reduce #'+ 0 (cdr form)))))
+  (let* ((not-0 (remq 0 (byte-opt--arith-reduce #'+ 0 (cdr form))))
+         (args (if (and (= (length not-0) 1)
+                        (> (length form) 2))
+                   ;; We removed numbers and only one arg remains: add a 0
+                   ;; so that it isn't turned into (* X 1) later on.
+                   (append not-0 '(0))
+                 not-0)))
     (cond
      ;; (+) -> 0
      ((null args) 0)
@@ -987,11 +994,11 @@ for speeding up processing.")
     (list (car form) (nth 2 form) (nth 1 form)))))
 
 (defun byte-opt--nary-comparison (form)
-  "Optimise n-ary comparisons such as `=', `<' etc."
+  "Optimize n-ary comparisons such as `=', `<' etc."
   (let ((nargs (length (cdr form))))
     (cond
      ((= nargs 1)
-      `(progn (cadr form) t))
+      `(progn ,(cadr form) t))
      ((>= nargs 3)
       ;; At least 3 arguments: transform to N-1 binary comparisons,
       ;; since those have their own byte-ops which are particularly
@@ -1002,7 +1009,7 @@ for speeding up processing.")
         (if (memq nil (mapcar #'macroexp-copyable-p (cddr form)))
             ;; At least one arg beyond the first is non-constant non-variable:
             ;; create temporaries for all args to guard against side-effects.
-            ;; The optimiser will eliminate trivial bindings later.
+            ;; The optimizer will eliminate trivial bindings later.
             (let ((i 1))
               (dolist (arg (cdr form))
                 (let ((var (make-symbol (format "arg%d" i))))
@@ -1059,23 +1066,26 @@ See Info node `(elisp) Integer Basics'."
   (and (integerp o) (<= -536870912 o 536870911)))
 
 (defun byte-optimize-equal (form)
-  ;; Replace `equal' or `eql' with `eq' if at least one arg is a
-  ;; symbol or fixnum.
-  (byte-optimize-binary-predicate
-   (if (= (length (cdr form)) 2)
-       (if (or (byte-optimize--constant-symbol-p (nth 1 form))
-               (byte-optimize--constant-symbol-p (nth 2 form))
-               (byte-optimize--fixnump (nth 1 form))
-               (byte-optimize--fixnump (nth 2 form)))
-           (cons 'eq (cdr form))
-         form)
-     ;; Arity errors reported elsewhere.
-     form)))
+  (cond ((/= (length (cdr form)) 2) form)  ; Arity errors reported elsewhere.
+        ;; Anything is identical to itself.
+        ((and (eq (nth 1 form) (nth 2 form)) (symbolp (nth 1 form))) t)
+        ;; Replace `equal' or `eql' with `eq' if at least one arg is a
+        ;; symbol or fixnum.
+        ((or (byte-optimize--constant-symbol-p (nth 1 form))
+             (byte-optimize--constant-symbol-p (nth 2 form))
+             (byte-optimize--fixnump (nth 1 form))
+             (byte-optimize--fixnump (nth 2 form)))
+         (byte-optimize-binary-predicate (cons 'eq (cdr form))))
+        (t (byte-optimize-binary-predicate form))))
 
 (defun byte-optimize-eq (form)
-  (pcase (cdr form)
-    ((or `(,x nil) `(nil ,x)) `(not ,x))
-    (_ (byte-optimize-binary-predicate form))))
+  (cond ((/= (length (cdr form)) 2) form)  ; arity error
+        ;; Anything is identical to itself.
+        ((and (eq (nth 1 form) (nth 2 form)) (symbolp (nth 1 form))) t)
+        ;; Strength-reduce comparison with `nil'.
+        ((null (nth 1 form)) `(not ,(nth 2 form)))
+        ((null (nth 2 form)) `(not ,(nth 1 form)))
+        (t (byte-optimize-binary-predicate form))))
 
 (defun byte-optimize-member (form)
   (cond
@@ -1426,12 +1436,15 @@ See Info node `(elisp) Integer Basics'."
 
 
 (defun byte-optimize-funcall (form)
-  ;; (funcall (lambda ...) ...) ==> ((lambda ...) ...)
-  ;; (funcall foo ...) ==> (foo ...)
-  (let ((fn (nth 1 form)))
-    (if (memq (car-safe fn) '(quote function))
-	(cons (nth 1 fn) (cdr (cdr form)))
-      form)))
+  ;; (funcall #'(lambda ...) ...) -> (let ...)
+  ;; (funcall #'SYM ...) -> (SYM ...)
+  ;; (funcall 'SYM ...)  -> (SYM ...)
+  (pcase form
+    (`(,_ #'(lambda . ,_) . ,_)
+     (macroexp--unfold-lambda form))
+    (`(,_ ,(or `#',f `',(and f (pred symbolp))) . ,actuals)
+     `(,f ,@actuals))
+    (_ form)))
 
 (defun byte-optimize-apply (form)
   (let ((len (length form)))
@@ -1466,7 +1479,7 @@ See Info node `(elisp) Integer Basics'."
 (put 'let* 'byte-optimizer #'byte-optimize-letX)
 (defun byte-optimize-letX (form)
   (pcase form
-    ;; No bindings.
+    ;; Bindings list is empty.
     (`(,_ () . ,body)
      `(progn . ,body))
 
@@ -1476,7 +1489,7 @@ See Info node `(elisp) Integer Basics'."
          `(progn ,@(mapcar #'cadr bindings) ,const)
        `(,head ,(butlast bindings) ,(cadar (last bindings)) ,const)))
 
-    ;; Body is last variable.
+    ;; Body does nothing but return the last variable in bindings.
     (`(,head ,(and bindings
                    (let last-var (caar (last bindings))))
              ,(and last-var             ; non-linear pattern
@@ -1525,6 +1538,44 @@ See Info node `(elisp) Integer Basics'."
 (defun byte-optimize-list (form)
   ;; (list) -> nil
   (and (cdr form) form))
+
+(put 'nconc 'byte-optimizer #'byte-optimize-nconc)
+(defun byte-optimize-nconc (form)
+  (pcase (cdr form)
+    ('nil nil)                          ; (nconc) -> nil
+    (`(,x) x)                           ; (nconc X) -> X
+    (_ (named-let loop ((args (cdr form)) (newargs nil))
+         (if args
+             (let ((arg (car args))
+                   (prev (car newargs)))
+               (cond
+                ;; Elide null args.
+                ((and (null arg)
+                      ;; Don't elide a terminal nil unless preceded by
+                      ;; a nonempty proper list, since that will have
+                      ;; its last cdr forced to nil.
+                      (or (cdr args)
+                          ;; FIXME: prove the 'nonempty proper list' property
+                          ;; for more forms than just `list', such as
+                          ;; `append', `mapcar' etc.
+                          (eq 'list (car-safe (car newargs)))))
+                 (loop (cdr args) newargs))
+                ;; Merge consecutive `list' args.
+                ((and (eq (car-safe arg) 'list)
+                      (eq (car-safe prev) 'list))
+                 (loop (cons (cons (car prev) (append (cdr prev) (cdr arg)))
+                             (cdr args))
+                       (cdr newargs)))
+                ;; (nconc ... (list A) B ...) -> (nconc ... (cons A B) ...)
+                ((and (eq (car-safe prev) 'list) (cdr prev) (null (cddr prev)))
+                 (loop (cdr args)
+                       (cons (list 'cons (cadr prev) arg)
+                             (cdr newargs))))
+                (t (loop (cdr args) (cons arg newargs)))))
+           (let ((new-form (cons (car form) (nreverse newargs))))
+             (if (equal new-form form)
+                 form
+               new-form)))))))
 
 (put 'append 'byte-optimizer #'byte-optimize-append)
 (defun byte-optimize-append (form)
@@ -1578,11 +1629,9 @@ See Info node `(elisp) Integer Basics'."
             ;; (append X) -> X
             ((null newargs) arg)
 
-            ;; (append (list Xs...) nil) -> (list Xs...)
-            ((and (null arg)
-                  newargs (null (cdr newargs))
-                  (consp prev) (eq (car prev) 'list))
-             prev)
+            ;; (append ... (list Xs...) nil) -> (append ... (list Xs...))
+            ((and (null arg) (eq (car-safe prev) 'list))
+             (cons (car form) (nreverse newargs)))
 
             ;; (append '(X) Y)     -> (cons 'X Y)
             ;; (append (list X) Y) -> (cons X Y)
@@ -1593,13 +1642,13 @@ See Info node `(elisp) Integer Basics'."
                               (= (length (cadr prev)) 1)))
                         ((eq (car prev) 'list)
                          (= (length (cdr prev)) 1))))
-             (list 'cons (if (eq (car prev) 'quote)
-                             (macroexp-quote (caadr prev))
-                           (cadr prev))
-                   arg))
+             `(cons ,(if (eq (car prev) 'quote)
+                         (macroexp-quote (caadr prev))
+                       (cadr prev))
+                    ,arg))
 
             (t
-             (let ((new-form (cons 'append (nreverse (cons arg newargs)))))
+             (let ((new-form (cons (car form) (nreverse (cons arg newargs)))))
                (if (equal new-form form)
                    form
                  new-form))))))))
@@ -1642,98 +1691,242 @@ See Info node `(elisp) Integer Basics'."
 
 ;; I wonder if I missed any :-\)
 (let ((side-effect-free-fns
-       '(% * + - / /= 1+ 1- < <= = > >= abs acos append aref ash asin atan
-	 assq
-         base64-decode-string base64-encode-string base64url-encode-string
+       '(
+         ;; alloc.c
+         make-bool-vector make-byte-code make-list make-record make-string
+         make-symbol make-vector
+         ;; buffer.c
+         buffer-base-buffer buffer-chars-modified-tick buffer-file-name
+         buffer-local-value buffer-local-variables buffer-modified-p
+         buffer-modified-tick buffer-name get-buffer next-overlay-change
+         overlay-buffer overlay-end overlay-get overlay-properties
+         overlay-start overlays-at overlays-in previous-overlay-change
+         ;; callint.c
+         prefix-numeric-value
+         ;; casefiddle.c
+         capitalize downcase upcase upcase-initials
+         ;; category.c
+         category-docstring category-set-mnemonics char-category-set
+         copy-category-table get-unused-category make-category-set
+         ;; character.c
+         char-width get-byte multibyte-char-to-unibyte string string-width
+         unibyte-char-to-multibyte unibyte-string
+         ;; charset.c
+         decode-char encode-char
+         ;; chartab.c
+         make-char-table
+         ;; data.c
+         % * + - / /= 1+ 1- < <= = > >=
+         aref ash bare-symbol
          bool-vector-count-consecutive bool-vector-count-population
          bool-vector-subsetp
-	 boundp buffer-file-name buffer-local-variables buffer-modified-p
-	 buffer-substring byte-code-function-p
-	 capitalize car-less-than-car car cdr ceiling char-after char-before
-	 char-equal char-to-string char-width compare-strings
-	 window-configuration-equal-p concat coordinates-in-window-p
-	 copy-alist copy-sequence copy-marker copysign cos
-	 current-time-string current-time-zone
-	 decode-char
-	 decode-time default-boundp default-value documentation downcase
-	 elt encode-char exp expt encode-time error-message-string
-	 fboundp fceiling featurep ffloor
-	 file-directory-p file-exists-p file-locked-p file-name-absolute-p
-         file-name-concat
-	 file-newer-than-file-p file-readable-p file-symlink-p file-writable-p
-	 float float-time floor format format-message format-time-string
-         frame-first-window frame-root-window frame-selected-window
-	 frame-visible-p fround ftruncate
-	 get gethash get-buffer get-buffer-window get-file-buffer
-	 hash-table-count
-	 intern-soft isnan
-	 keymap-parent
-         ldexp
-         length length< length> length=
-         line-beginning-position line-end-position pos-bol pos-eol
-	 local-variable-if-set-p local-variable-p locale-info
-	 log logand logb logcount logior lognot logxor
-	 make-byte-code make-list make-string make-symbol marker-buffer max
-         match-beginning match-end
-	 member memq memql min minibuffer-selected-window minibuffer-window
-	 mod multibyte-char-to-unibyte next-window nth nthcdr number-to-string
-	 prefix-numeric-value previous-window prin1-to-string propertize
-	 rassq rassoc read-from-string
-         regexp-quote region-beginning region-end reverse round
-	 sin sqrt string string-equal string-lessp
-         string-search string-to-char
-	 string-to-number string-to-syntax substring substring-no-properties
-	 sxhash-equal sxhash-eq sxhash-eql
-	 symbol-function symbol-name symbol-plist symbol-value
-         string-make-unibyte
-	 string-make-multibyte string-as-multibyte string-as-unibyte
-	 string-to-multibyte
-	 take tan time-convert truncate
-	 unibyte-char-to-multibyte upcase user-full-name
-	 user-login-name
-	 vconcat
-	 window-at window-body-height
-	 window-body-width window-buffer window-dedicated-p window-display-table
-	 window-combination-limit window-frame window-fringes
-	 window-hscroll
-	 window-left-child window-left-column window-margins window-minibuffer-p
-	 window-next-buffers window-next-sibling window-new-normal
-	 window-new-total window-normal-size window-parameter window-parameters
-	 window-parent window-point window-prev-buffers
-         window-prev-sibling window-scroll-bars
-	 window-start window-text-height window-top-child window-top-line
-	 window-total-height window-total-width window-use-time window-vscroll
-	 ))
+         boundp car cdr default-boundp default-value fboundp
+         get-variable-watchers indirect-variable
+         local-variable-if-set-p local-variable-p
+         logand logcount logior lognot logxor max min mod
+         number-to-string position-symbol string-to-number
+         subr-arity subr-name subr-native-lambda-list subr-type
+         symbol-function symbol-name symbol-plist symbol-value
+         symbol-with-pos-pos variable-binding-locus
+         ;; doc.c
+         documentation
+         ;; editfns.c
+         buffer-substring buffer-substring-no-properties
+         byte-to-position byte-to-string
+         char-after char-before char-equal char-to-string
+         compare-buffer-substrings
+         format format-message
+         group-name
+         line-beginning-position line-end-position ngettext pos-bol pos-eol
+         propertize region-beginning region-end string-to-char
+         user-full-name user-login-name
+         ;; eval.c
+         special-variable-p
+         ;; fileio.c
+         car-less-than-car directory-name-p file-directory-p file-exists-p
+         file-name-absolute-p file-name-concat file-newer-than-file-p
+         file-readable-p file-symlink-p file-writable-p
+         ;; filelock.c
+         file-locked-p
+         ;; floatfns.c
+         abs acos asin atan ceiling copysign cos exp expt fceiling ffloor
+         float floor frexp fround ftruncate isnan ldexp log logb round
+         sin sqrt tan
+         truncate
+         ;; fns.c
+         append assq
+         base64-decode-string base64-encode-string base64url-encode-string
+         buffer-hash buffer-line-statistics
+         compare-strings concat copy-alist copy-hash-table copy-sequence elt
+         equal equal-including-properties
+         featurep get
+         gethash hash-table-count hash-table-rehash-size
+         hash-table-rehash-threshold hash-table-size hash-table-test
+         hash-table-weakness
+         length length< length= length>
+         line-number-at-pos load-average locale-info make-hash-table md5
+         member memq memql nth nthcdr
+         object-intervals rassoc rassq reverse secure-hash
+         string-as-multibyte string-as-unibyte string-bytes
+         string-collate-equalp string-collate-lessp string-distance
+         string-equal string-lessp string-make-multibyte string-make-unibyte
+         string-search string-to-multibyte string-to-unibyte
+         string-version-lessp
+         substring substring-no-properties
+         sxhash-eq sxhash-eql sxhash-equal sxhash-equal-including-properties
+         take vconcat
+         ;; frame.c
+         frame-ancestor-p frame-bottom-divider-width frame-char-height
+         frame-char-width frame-child-frame-border-width frame-focus
+         frame-fringe-width frame-internal-border-width frame-native-height
+         frame-native-width frame-parameter frame-parameters frame-parent
+         frame-pointer-visible-p frame-position frame-right-divider-width
+         frame-scale-factor frame-scroll-bar-height frame-scroll-bar-width
+         frame-text-cols frame-text-height frame-text-lines frame-text-width
+         frame-total-cols frame-total-lines frame-visible-p
+         frame-window-state-change next-frame previous-frame
+         tool-bar-pixel-width window-system
+         ;; fringe.c
+         fringe-bitmaps-at-pos
+         ;; keyboard.c
+         posn-at-point posn-at-x-y
+         ;; keymap.c
+         copy-keymap keymap-parent keymap-prompt make-keymap make-sparse-keymap
+         ;; lread.c
+         intern-soft read-from-string
+         ;; marker.c
+         copy-marker marker-buffer marker-insertion-type marker-position
+         ;; minibuf.c
+         active-minibuffer-window assoc-string innermost-minibuffer-p
+         minibuffer-innermost-command-loop-p minibufferp
+         ;; print.c
+         error-message-string prin1-to-string
+         ;; process.c
+         format-network-address get-buffer-process get-process
+         process-buffer process-coding-system process-command process-filter
+         process-id process-inherit-coding-system-flag process-mark
+         process-name process-plist process-query-on-exit-flag
+         process-running-child-p process-sentinel process-thread
+         process-tty-name process-type
+         ;; search.c
+         match-beginning match-end regexp-quote
+         ;; sqlite.c
+         sqlite-columns sqlite-more-p sqlite-version
+         ;; syntax.c
+         char-syntax copy-syntax-table matching-paren string-to-syntax
+         syntax-class-to-char
+         ;; term.c
+         controlling-tty-p tty-display-color-cells tty-display-color-p
+         tty-top-frame tty-type
+         ;; terminal.c
+         frame-terminal terminal-list terminal-live-p terminal-name
+         terminal-parameter terminal-parameters
+         ;; textprop.c
+         get-char-property get-char-property-and-overlay get-text-property
+         next-char-property-change next-property-change
+         next-single-char-property-change next-single-property-change
+         previous-char-property-change previous-property-change
+         previous-single-char-property-change previous-single-property-change
+         text-properties-at text-property-any text-property-not-all
+         ;; thread.c
+         all-threads condition-mutex condition-name mutex-name thread-live-p
+         thread-name
+         ;; timefns.c
+         current-cpu-time
+         current-time-string current-time-zone decode-time encode-time
+         float-time format-time-string time-add time-convert time-equal-p
+         time-less-p time-subtract
+         ;; window.c
+         coordinates-in-window-p frame-first-window frame-root-window
+         frame-selected-window get-buffer-window minibuffer-selected-window
+         minibuffer-window next-window previous-window window-at
+         window-body-height window-body-width window-buffer
+         window-combination-limit window-configuration-equal-p
+         window-dedicated-p window-display-table window-frame window-fringes
+         window-hscroll window-left-child window-left-column window-margins
+         window-minibuffer-p window-new-normal window-new-total
+         window-next-buffers window-next-sibling window-normal-size
+         window-parameter window-parameters window-parent window-point
+         window-prev-buffers window-prev-sibling window-scroll-bars
+         window-start window-text-height window-top-child window-top-line
+         window-total-height window-total-width window-use-time window-vscroll
+         ;; xdisp.c
+         buffer-text-pixel-size current-bidi-paragraph-direction
+         get-display-property invisible-p line-pixel-height lookup-image-map
+         tab-bar-height tool-bar-height window-text-pixel-size
+         ))
       (side-effect-and-error-free-fns
-       '(arrayp atom
-	 bobp bolp bool-vector-p
-	 buffer-list buffer-size buffer-string bufferp
-	 car-safe case-table-p cdr-safe char-or-string-p characterp
-	 charsetp commandp cons consp
-	 current-buffer current-global-map current-indentation
-	 current-local-map current-minor-mode-maps current-time
-	 eobp eolp eq equal
-	 floatp following-char framep
-	 hash-table-p
-	 identity indirect-function integerp integer-or-marker-p
-	 invocation-directory invocation-name
-	 keymapp keywordp
-	 list listp
-	 make-marker mark-marker markerp max-char
-	 natnump nlistp null number-or-marker-p numberp
-	 overlayp
-	 point point-marker point-min point-max preceding-char
-	 processp proper-list-p
-	 recent-keys recursion-depth
-	 safe-length selected-frame selected-window sequencep
-	 standard-case-table standard-syntax-table stringp subrp symbolp
-	 syntax-table syntax-table-p
-	 this-command-keys this-command-keys-vector this-single-command-keys
-	 this-single-command-raw-keys type-of
-	 user-real-login-name user-real-uid user-uid
-	 vector vectorp visible-frame-list
-	 wholenump window-configuration-p window-live-p
-	 window-valid-p windowp)))
+       '(
+         ;; alloc.c
+         bool-vector cons list make-marker purecopy record vector
+         ;; buffer.c
+         buffer-list buffer-live-p current-buffer overlay-lists overlayp
+         ;; casetab.c
+         case-table-p current-case-table standard-case-table
+         ;; category.c
+         category-table category-table-p make-category-table
+         standard-category-table
+         ;; character.c
+         characterp max-char
+         ;; charset.c
+         charsetp
+         ;; data.c
+         arrayp atom bare-symbol-p bool-vector-p bufferp byte-code-function-p
+         byteorder car-safe cdr-safe char-or-string-p char-table-p
+         condition-variable-p consp eq floatp indirect-function
+         integer-or-marker-p integerp keywordp listp markerp
+         module-function-p multibyte-string-p mutexp natnump nlistp null
+         number-or-marker-p numberp recordp remove-pos-from-symbol
+         sequencep stringp subr-native-elisp-p subrp symbol-with-pos-p symbolp
+         threadp type-of user-ptrp vector-or-char-table-p vectorp wholenump
+         ;; editfns.c
+         bobp bolp buffer-size buffer-string current-message emacs-pid
+         eobp eolp following-char gap-position gap-size group-gid
+         group-real-gid mark-marker point point-marker point-max point-min
+         position-bytes preceding-char system-name
+         user-real-login-name user-real-uid user-uid
+         ;; emacs.c
+         invocation-directory invocation-name
+         ;; eval.c
+         commandp functionp
+         ;; fileio.c
+         default-file-modes
+         ;; fns.c
+         eql
+         hash-table-p identity proper-list-p safe-length
+         secure-hash-algorithms
+         ;; frame.c
+         frame-list frame-live-p framep last-nonminibuffer-frame
+         old-selected-frame selected-frame visible-frame-list
+         ;; image.c
+         imagep
+         ;; indent.c
+         current-column current-indentation
+         ;; keyboard.c
+         current-idle-time current-input-mode recent-keys recursion-depth
+         this-command-keys this-command-keys-vector this-single-command-keys
+         this-single-command-raw-keys
+         ;; keymap.c
+         current-global-map current-local-map current-minor-mode-maps keymapp
+         ;; minibuf.c
+         minibuffer-contents minibuffer-contents-no-properties minibuffer-depth
+         minibuffer-prompt minibuffer-prompt-end
+         ;; process.c
+         process-list processp signal-names waiting-for-user-input-p
+         ;; sqlite.c
+         sqlite-available-p sqlitep
+         ;; syntax.c
+         standard-syntax-table syntax-table syntax-table-p
+         ;; thread.c
+         current-thread
+         ;; timefns.c
+         current-time
+         ;; window.c
+         selected-window window-configuration-p window-live-p window-valid-p
+         windowp
+         ;; xdisp.c
+         long-line-optimizations-p
+         )))
   (while side-effect-free-fns
     (put (car side-effect-free-fns) 'side-effect-free t)
     (setq side-effect-free-fns (cdr side-effect-free-fns)))
@@ -1758,41 +1951,35 @@ See Info node `(elisp) Integer Basics'."
 ;; values if a marker is moved.
 
 (let ((pure-fns
-       '(concat regexp-quote
-	 string-to-char string-to-syntax symbol-name
-         eq eql
-         = /= < <= >= > min max
-         + - * / % mod abs ash 1+ 1- sqrt
-         logand logior lognot logxor logcount
-         copysign isnan ldexp float logb
-         floor ceiling round truncate
-         ffloor fceiling fround ftruncate
-         string-equal string-lessp
-         string-search
-         consp atom listp nlistp proper-list-p
-         sequencep arrayp vectorp stringp bool-vector-p hash-table-p
-         null
-         numberp integerp floatp natnump characterp
-         integer-or-marker-p number-or-marker-p char-or-string-p
-         symbolp keywordp
-         type-of
-         identity
-
-         ;; The following functions are pure up to mutation of their
-         ;; arguments.  This is pure enough for the purposes of
-         ;; constant folding, but not necessarily for all kinds of
-         ;; code motion.
-         car cdr car-safe cdr-safe nth nthcdr take
-         equal
-         length safe-length
-         memq memql member
-         ;; `assoc' and `assoc-default' are excluded since they are
-         ;; impure if the test function is (consider `string-match').
-         assq rassq rassoc
-         aref elt
-         base64-decode-string base64-encode-string base64url-encode-string
-         bool-vector-subsetp
-         bool-vector-count-population bool-vector-count-consecutive
+       '(
+         ;; character.c
+         characterp max-char
+         ;; data.c
+         % * + - / /= 1+ 1- < <= = > >= aref arrayp ash atom bare-symbol
+         bool-vector-count-consecutive bool-vector-count-population
+         bool-vector-p bool-vector-subsetp
+         bufferp car car-safe cdr cdr-safe char-or-string-p char-table-p
+         condition-variable-p consp eq floatp integer-or-marker-p integerp
+         keywordp listp logand logcount logior lognot logxor markerp max min
+         mod multibyte-string-p mutexp natnump nlistp null number-or-marker-p
+         numberp recordp remove-pos-from-symbol sequencep stringp symbol-name
+         symbolp threadp type-of vector-or-char-table-p vectorp
+         ;; editfns.c
+         string-to-char
+         ;; floatfns.c
+         abs ceiling copysign fceiling ffloor float floor fround ftruncate
+         isnan ldexp logb round sqrt truncate
+         ;; fns.c
+         assq base64-decode-string base64-encode-string base64url-encode-string
+         concat elt eql equal equal-including-properties
+         hash-table-p identity length length< length=
+         length> member memq memql nth nthcdr proper-list-p rassoc rassq
+         safe-length string-bytes string-distance string-equal string-lessp
+         string-search string-version-lessp take
+         ;; search.c
+         regexp-quote
+         ;; syntax.c
+         string-to-syntax
          )))
   (while pure-fns
     (put (car pure-fns) 'pure t)
@@ -1972,7 +2159,7 @@ See Info node `(elisp) Integer Basics'."
    '(byte-constant byte-dup byte-stack-ref byte-stack-set byte-discard
      byte-discardN byte-discardN-preserve-tos
      byte-symbolp byte-consp byte-stringp byte-listp byte-numberp byte-integerp
-     byte-eq byte-not
+     byte-not
      byte-cons byte-list1 byte-list2 byte-list3 byte-list4 byte-listN
      byte-interactive-p)
    ;; How about other side-effect-free-ops?  Is it safe to move an
@@ -1980,11 +2167,16 @@ See Info node `(elisp) Integer Basics'."
    ;; No, it is not, because the unwind-protect forms can alter
    ;; the inside of the object to which nth would apply.
    ;; For the same reason, byte-equal was deleted from this list.
+   ;;
+   ;; In particular, `byte-eq' isn't here despite `eq' being nominally
+   ;; pure because it is currently affected by `symbols-with-pos-enabled'
+   ;; and so cannot be sunk past an unwind op that might end a binding of
+   ;; that variable.  Yes, this is unsatisfactory.
    "Byte-codes that can be moved past an unbind.")
 
 (defconst byte-compile-side-effect-and-error-free-ops
   '(byte-constant byte-dup byte-symbolp byte-consp byte-stringp byte-listp
-    byte-integerp byte-numberp byte-eq byte-equal byte-not byte-car-safe
+    byte-integerp byte-numberp byte-eq byte-not byte-car-safe
     byte-cdr-safe byte-cons byte-list1 byte-list2 byte-list3 byte-list4
     byte-listN byte-point byte-point-max
     byte-point-min byte-following-char byte-preceding-char
@@ -1995,10 +2187,11 @@ See Info node `(elisp) Integer Basics'."
   (append
    '(byte-varref byte-nth byte-memq byte-car byte-cdr byte-length byte-aref
      byte-symbol-value byte-get byte-concat2 byte-concat3 byte-sub1 byte-add1
-     byte-eqlsign byte-gtr byte-lss byte-leq byte-geq byte-diff byte-negate
-     byte-plus byte-max byte-min byte-mult byte-char-after byte-char-syntax
-     byte-buffer-substring byte-string= byte-string< byte-nthcdr byte-elt
-     byte-member byte-assq byte-quo byte-rem byte-substring)
+     byte-eqlsign byte-equal byte-gtr byte-lss byte-leq byte-geq byte-diff
+     byte-negate byte-plus byte-max byte-min byte-mult byte-char-after
+     byte-char-syntax byte-buffer-substring byte-string= byte-string<
+     byte-nthcdr byte-elt byte-member byte-assq byte-quo byte-rem
+     byte-substring)
    byte-compile-side-effect-and-error-free-ops))
 
 ;; This crock is because of the way DEFVAR_BOOL variables work.
@@ -2765,7 +2958,9 @@ If FOR-EFFECT is non-nil, the return value is assumed to be of no importance."
                       (or (memq (caar tmp) '(byte-discard byte-discardN))
                           ;; Make sure we don't hoist a discardN-preserve-tos
                           ;; that really should be merged or deleted instead.
-                          (and (eq (caar tmp) 'byte-discardN-preserve-tos)
+                          (and (or (eq (caar tmp) 'byte-discardN-preserve-tos)
+                                   (and (eq (caar tmp) 'byte-stack-set)
+                                        (eql (cdar tmp) 1)))
                                (let ((next (cadr tmp)))
                                  (not (or (memq (car next)
                                                 '(byte-discardN-preserve-tos

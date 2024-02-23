@@ -1,6 +1,6 @@
 /* Process support for GNU Emacs on the Microsoft Windows API.
 
-Copyright (C) 1992, 1995, 1999-2023 Free Software Foundation, Inc.
+Copyright (C) 1992, 1995, 1999-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -1956,7 +1956,7 @@ sys_spawnve (int mode, char *cmdname, char **argv, char **envp)
       program = build_string (cmdname);
       full = Qnil;
       openp (Vexec_path, program, Vexec_suffixes, &full, make_fixnum (X_OK),
-	     0, 0);
+	     0, 0, NULL);
       if (NILP (full))
 	{
 	  errno = EINVAL;

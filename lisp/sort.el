@@ -1,6 +1,6 @@
 ;;; sort.el --- commands to sort text in an Emacs buffer -*- lexical-binding: t -*-
 
-;; Copyright (C) 1986-1987, 1994-1995, 2001-2023 Free Software
+;; Copyright (C) 1986-1987, 1994-1995, 2001-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Author: Howie Kaye
@@ -257,18 +257,15 @@ the sort order."
                  (lambda () (skip-chars-forward "\n"))
 		 'forward-page))))
 
-(defvar sort-fields-syntax-table nil)
-(if sort-fields-syntax-table nil
-  (let ((table (make-syntax-table))
-	(i 0))
-    (while (< i 256)
-      (modify-syntax-entry i "w" table)
-      (setq i (1+ i)))
+(defvar sort-fields-syntax-table
+  (let ((table (make-syntax-table)))
+    (dotimes (i 256)
+      (modify-syntax-entry i "w" table))
     (modify-syntax-entry ?\s " " table)
     (modify-syntax-entry ?\t " " table)
     (modify-syntax-entry ?\n " " table)
     (modify-syntax-entry ?\. "_" table)	; for floating pt. numbers. -wsr
-    (setq sort-fields-syntax-table table)))
+    table))
 
 (defcustom sort-numeric-base 10
   "The default base used by `sort-numeric-fields'."
@@ -480,6 +477,27 @@ sRegexp specifying key within record: \nr")
                                  (match-end n))
                          ;; if there was no such register
                          (error (throw 'key nil))))))))))
+
+;;;###autoload
+(defun sort-on (sequence predicate accessor)
+  "Sort SEQUENCE by calling PREDICATE on sort keys produced by ACCESSOR.
+SEQUENCE should be the input sequence to sort.
+Elements of SEQUENCE are sorted by keys which are obtained by
+calling ACCESSOR on each element.  ACCESSOR should be a function of
+one argument, an element of SEQUENCE, and should return the key
+value to be compared by PREDICATE for sorting the element.
+PREDICATE is the function for comparing keys; it is called with two
+arguments, the keys to compare, and should return non-nil if the
+first key should sort before the second key.
+The return value is always a new list.
+This function has the performance advantage of evaluating
+ACCESSOR only once for each element in the input SEQUENCE, and is
+therefore appropriate when computing the key by ACCESSOR is an
+expensive operation.  This is known as the \"decorate-sort-undecorate\"
+paradigm, or the Schwartzian transform."
+  (mapcar #'car
+          (sort (mapcar #'(lambda (x) (cons x (funcall accessor x))) sequence)
+                #'(lambda (x y) (funcall predicate (cdr x) (cdr y))))))
 
 
 (defvar sort-columns-subprocess t)

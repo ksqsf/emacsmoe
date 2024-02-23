@@ -1,6 +1,6 @@
 ;;; tramp-compat.el --- Tramp compatibility functions  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2007-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: comm, processes
@@ -29,14 +29,15 @@
 
 ;;; Code:
 
+(require 'tramp-loaddefs)
+(require 'ansi-color)
 (require 'auth-source)
 (require 'format-spec)
-(require 'ls-lisp) ;; Due to `tramp-handle-insert-directory'.
 (require 'parse-time)
 (require 'shell)
-(require 'subr-x)
+(require 'xdg)
 
-(declare-function tramp-error "tramp")
+(declare-function tramp-error "tramp-message")
 (declare-function tramp-tramp-file-p "tramp")
 (defvar tramp-temp-name-prefix)
 
@@ -60,14 +61,22 @@
 ;; avoid them in cases we know what we do.
 (defmacro tramp-compat-funcall (function &rest arguments)
   "Call FUNCTION with ARGUMENTS if it exists.  Do not raise compiler warnings."
+  (declare (indent 1) (debug t))
   `(when (functionp ,function)
      (with-no-warnings (funcall ,function ,@arguments))))
 
 ;; We must use a local directory.  If it is remote, we could run into
-;; an infloop.
+;; an infloop.  We try to follow the XDG specification, for security reasons.
 (defconst tramp-compat-temporary-file-directory
-  (eval (car (get 'temporary-file-directory 'standard-value)) t)
-  "The default value of `temporary-file-directory'.")
+  (file-name-as-directory
+   (if-let ((xdg (xdg-cache-home))
+	    ((file-directory-p xdg))
+	    ((file-writable-p xdg)))
+       ;; We can use `file-name-concat' starting with Emacs 28.1.
+       (prog1 (setq xdg (concat (file-name-as-directory xdg) "emacs"))
+	 (make-directory xdg t))
+     (eval (car (get 'temporary-file-directory 'standard-value)) t)))
+  "The default value of `temporary-file-directory' for Tramp.")
 
 (defsubst tramp-compat-make-temp-name ()
   "Generate a local temporary file name (compat function)."
@@ -194,7 +203,7 @@ Add the extension of F, if existing."
 	(let ((matches 0)
               (case-fold-search nil))
 	  (goto-char start)
-	  (while (re-search-forward regexp end t)
+	  (while (search-forward-regexp regexp end t)
             (replace-match replacement t)
             (setq matches (1+ matches)))
 	  (and (not (zerop matches))
@@ -218,6 +227,16 @@ Add the extension of F, if existing."
       #'length=
     (lambda (sequence length)
       (= (length sequence) length))))
+
+;; `always' is introduced with Emacs 28.1.
+(defalias 'tramp-compat-always
+  (if (fboundp 'always)
+      #'always
+    (lambda (&rest _arguments)
+      "Do nothing and return t.
+This function accepts any number of ARGUMENTS, but ignores them.
+Also see `ignore'."
+      t)))
 
 ;; `permission-denied' is introduced in Emacs 29.1.
 (defconst tramp-permission-denied
@@ -288,8 +307,18 @@ Add the extension of F, if existing."
       ?\N{KHMER SIGN CAMNUC PII KUUH})
     "List of characters equivalent to trailing colon in \"password\" prompts."))
 
+;; Macro `connection-local-p' is new in Emacs 30.1.
+(if (macrop 'connection-local-p)
+    (defalias 'tramp-compat-connection-local-p 'connection-local-p)
+  (defmacro tramp-compat-connection-local-p (variable)
+    "Non-nil if VARIABLE has a connection-local binding in `default-directory'."
+    `(let (connection-local-variables-alist file-local-variables-alist)
+       (hack-connection-local-variables
+	(connection-local-criteria-for-default-directory))
+       (and (assq ',variable connection-local-variables-alist) t))))
+
 (dolist (elt (all-completions "tramp-compat-" obarray 'functionp))
-  (put (intern elt) 'tramp-suppress-trace t))
+  (function-put (intern elt) 'tramp-suppress-trace t))
 
 (add-hook 'tramp-unload-hook
 	  (lambda ()
@@ -301,6 +330,18 @@ Add the extension of F, if existing."
 ;;; TODO:
 ;;
 ;; * Starting with Emacs 27.1, there's no need to escape open
-;;   parentheses with a backslash in docstrings anymore.
+;;   parentheses with a backslash in docstrings anymore.  However,
+;;   `outline-minor-mode' has still problems with this.  Since there
+;;   are developers using `outline-minor-mode' in Lisp files, we still
+;;   keep this quoting.
+;;
+;; * Starting with Emacs 29.1, use `buffer-match-p'.
+;;
+;; * Starting with Emacs 29.1, use `string-split'.
+;;
+;; * Starting with Emacs 30.1, there is `handler-bind'.  Use it
+;;   instead of `condition-case' when the origin of an error shall be
+;;   kept, for example when the HANDLER propagates the error with
+;;   `(signal (car err) (cdr err)'.
 
 ;;; tramp-compat.el ends here

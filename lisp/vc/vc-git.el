@@ -1,6 +1,6 @@
 ;;; vc-git.el --- VC backend for the git version control system -*- lexical-binding: t -*-
 
-;; Copyright (C) 2006-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2006-2024 Free Software Foundation, Inc.
 
 ;; Author: Alexandre Julliard <julliard@winehq.org>
 ;; Keywords: vc tools
@@ -89,6 +89,7 @@
 ;; - make-version-backups-p (file)                 NOT NEEDED
 ;; - previous-revision (file rev)                  OK
 ;; - next-revision (file rev)                      OK
+;; - file-name-changes (rev)                       OK
 ;; - check-headers ()                              COULD BE SUPPORTED
 ;; - delete-file (file)                            OK
 ;; - rename-file (old new)                         OK
@@ -122,7 +123,10 @@ If nil, use the value of `vc-diff-switches'.  If t, use no switches."
 
 (defcustom vc-git-annotate-switches nil
   "String or list of strings specifying switches for Git blame under VC.
-If nil, use the value of `vc-annotate-switches'.  If t, use no switches."
+If nil, use the value of `vc-annotate-switches'.  If t, use no switches.
+
+Tip: Set this to \"-w\" to make Git blame ignore whitespace when
+comparing changes.  See Man page `git-blame' for more."
   :type '(choice (const :tag "Unspecified" nil)
 		 (const :tag "None" t)
 		 (string :tag "Argument String")
@@ -144,6 +148,18 @@ If nil, use the value of `vc-annotate-switches'.  If t, use no switches."
 
 (defcustom vc-git-shortlog-switches nil
   "String or list of strings giving Git log switches for shortlogs."
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Argument String")
+                 (repeat :tag "Argument List" :value ("") string))
+  :version "30.1")
+
+(defcustom vc-git-file-name-changes-switches '("-M" "-C")
+  "String or list of string to pass to Git when finding previous names.
+
+This option should usually at least contain '-M'.  You can adjust
+the flags to change the similarity thresholds (default 50%).  Or
+add `--find-copies-harder' (slower in large projects, since it
+uses a full scan)."
   :type '(choice (const :tag "None" nil)
                  (string :tag "Argument String")
                  (repeat :tag "Argument List" :value ("") string))
@@ -413,15 +429,20 @@ in the order given by `git status'."
 
 (defun vc-git-mode-line-string (file)
   "Return a string for `vc-mode-line' to put in the mode line for FILE."
-  (let* ((rev (vc-working-revision file 'Git))
-         (disp-rev (or (vc-git--symbolic-ref file)
-                       (and rev (substring rev 0 7))))
-         (def-ml (vc-default-mode-line-string 'Git file))
-         (help-echo (get-text-property 0 'help-echo def-ml))
-         (face   (get-text-property 0 'face def-ml)))
-    (propertize (concat (substring def-ml 0 4) disp-rev)
-                'face face
-                'help-echo (concat help-echo "\nCurrent revision: " rev))))
+  (pcase-let* ((backend-name "Git")
+               (state (vc-state file))
+               (`(,state-echo ,face ,indicator)
+                (vc-mode-line-state state))
+               (rev (vc-working-revision file 'Git))
+               (disp-rev (or (vc-git--symbolic-ref file)
+                             (and rev (substring rev 0 7))))
+               (state-string (concat (unless (eq vc-display-status 'no-backend)
+                                       backend-name)
+                                     indicator disp-rev)))
+    (propertize state-string 'face face 'help-echo
+                (concat state-echo " under the " backend-name
+                        " version control system"
+                        "\nCurrent revision: " rev))))
 
 (cl-defstruct (vc-git-extra-fileinfo
             (:copier nil)
@@ -1058,7 +1079,8 @@ It is based on `log-edit-mode', and has Git-specific extensions."
           ;; might not support the non-ASCII characters in the log
           ;; message.  Handle also remote files.
           (if (eq system-type 'windows-nt)
-              (let ((default-directory (file-name-directory file1)))
+              (let ((default-directory (or (file-name-directory file1)
+                                           default-directory)))
                 (make-nearby-temp-file "git-msg"))))
          to-stash)
     (when vc-git-patch-string
@@ -1120,7 +1142,15 @@ It is based on `log-edit-mode', and has Git-specific extensions."
                     (t (push file-name to-stash)))
               (setq pos (point))))))
       (unless (string-empty-p vc-git-patch-string)
-        (let ((patch-file (make-nearby-temp-file "git-patch")))
+        (let ((patch-file (make-nearby-temp-file "git-patch"))
+              ;; Temporarily countermand the let-binding at the
+              ;; beginning of this function.
+              (coding-system-for-write
+               (coding-system-change-eol-conversion
+                ;; On DOS/Windows, it is important for the patch file
+                ;; to have the Unix EOL format, because Git expects
+                ;; that, even on Windows.
+                (or pcsw vc-git-commits-coding-system) 'unix)))
           (with-temp-file patch-file
             (insert vc-git-patch-string))
           (unwind-protect
@@ -1342,8 +1372,10 @@ This prompts for a branch to merge from."
 (defun vc-git-repository-url (file-or-dir &optional remote-name)
   (let ((default-directory (vc-git-root file-or-dir)))
     (with-temp-buffer
-      (vc-git-command (current-buffer) 0 nil "remote" "get-url"
-                      (or remote-name "origin"))
+      ;; The "get-url" subcommand of "git remote" was new in git 2.7.0;
+      ;; "git config" also works in older versions.  -- rgr, 15-Aug-23.
+      (let ((opt-name (concat "remote." (or remote-name "origin") ".url")))
+	(vc-git-command (current-buffer) 0 (list "config" "--get" opt-name)))
       (buffer-substring-no-properties (point-min) (1- (point-max))))))
 
 ;; Everywhere but here, follows vc-git-command, which uses vc-do-command
@@ -1397,7 +1429,16 @@ This prompts for a branch to merge from."
 ;; Long explanation here:
 ;; https://stackoverflow.com/questions/46487476/git-log-follow-graph-skips-commits
 (defcustom vc-git-print-log-follow nil
-  "If true, follow renames in Git logs for a single file."
+  "If non-nil, use the flag `--follow' when producing single file logs.
+
+A non-nil value will make the printed log automatically follow
+the file renames.  The downsides is that the log produced this
+way may omit certain (merge) commits, and that `log-view-diff'
+fails on commits that used the previous name, in that log buffer.
+
+When this variable is nil, and the log ends with a rename, we
+show a button below that which allows to show the log for the
+file name before the rename."
   :type 'boolean
   :version "26.1")
 
@@ -1629,7 +1670,6 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
     map))
 
 (defvar vc-git--log-view-long-font-lock-keywords nil)
-(defvar font-lock-keywords)
 (defvar vc-git-region-history-font-lock-keywords
   '((vc-git-region-history-font-lock)))
 
@@ -1707,7 +1747,7 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
                       "^refs/\\(heads\\|tags\\|remotes\\)/\\(.*\\)$")))
         (while (re-search-forward regexp nil t)
           (push (match-string 2) table))))
-    table))
+    (nreverse table)))
 
 (defun vc-git-revision-completion-table (files)
   (letrec ((table (lazy-completion-table
@@ -1723,14 +1763,19 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
 
 (declare-function vc-annotate-convert-time "vc-annotate" (&optional time))
 
+(autoload 'decoded-time-set-defaults "time-date")
+(autoload 'iso8601-parse "iso8601")
+
 (defun vc-git-annotate-time ()
-  (and (re-search-forward "^[0-9a-f^]+[^()]+(.*?\\([0-9]+\\)-\\([0-9]+\\)-\\([0-9]+\\) \\(:?\\([0-9]+\\):\\([0-9]+\\):\\([0-9]+\\) \\([-+0-9]+\\)\\)? *[0-9]+) " nil t)
-       (vc-annotate-convert-time
-        (apply #'encode-time (mapcar (lambda (match)
-                                       (if (match-beginning match)
-                                           (string-to-number (match-string match))
-                                         0))
-                                     '(6 5 4 3 2 1 7))))))
+  (and (re-search-forward "^[0-9a-f^]+[^()]+(.*?\\([0-9]+-[0-9]+-[0-9]+\\)\\(?: \\([0-9]+:[0-9]+:[0-9]+\\) \\([-+0-9]+\\)\\)? +[0-9]+) " nil t)
+       (let* ((dt (match-string 1))
+              (dt (if (not (match-beginning 2)) dt
+                    ;; Format as ISO 8601.
+                    (concat dt "T" (match-string 2) (match-string 3))))
+              (decoded (ignore-errors (iso8601-parse dt))))
+         (and decoded
+              (vc-annotate-convert-time
+               (encode-time (decoded-time-set-defaults decoded)))))))
 
 (defun vc-git-annotate-extract-revision-at-line ()
   (save-excursion
@@ -1812,8 +1857,11 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
 (defun vc-git--rev-parse (rev)
   (with-temp-buffer
     (and
-     (vc-git--out-ok "rev-parse" rev)
-     (buffer-substring-no-properties (point-min) (+ (point-min) 40)))))
+     (apply #'vc-git--out-ok "rev-parse"
+            (append (when vc-use-short-revision '("--short"))
+                    (list rev)))
+     (goto-char (point-min))
+     (buffer-substring-no-properties (point) (pos-eol)))))
 
 (defun vc-git-next-revision (file rev)
   "Git-specific version of `vc-next-revision'."
@@ -1842,6 +1890,31 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
                    (point)
                    (progn (forward-line 1) (1- (point)))))))))
     (or (vc-git-symbolic-commit next-rev) next-rev)))
+
+(defun vc-git-file-name-changes (rev)
+  (with-temp-buffer
+    (let ((root (vc-git-root default-directory)))
+      (unless vc-git-print-log-follow
+        (apply #'vc-git-command (current-buffer) t nil
+               "diff"
+               "--name-status"
+               "--diff-filter=ADCR"
+               (concat rev "^") rev
+               (vc-switches 'git 'file-name-changes)))
+      (let (res)
+        (goto-char (point-min))
+        (while (re-search-forward "^\\([ADCR]\\)[0-9]*\t\\([^\n\t]+\\)\\(?:\t\\([^\n\t]+\\)\\)?" nil t)
+          (pcase (match-string 1)
+            ("A" (push (cons nil (match-string 2)) res))
+            ("D" (push (cons (match-string 2) nil) res))
+            ((or "C" "R") (push (cons (match-string 2) (match-string 3)) res))
+            ;; ("M" (push (cons (match-string 1) (match-string 1)) res))
+            ))
+        (mapc (lambda (c)
+                (if (car c) (setcar c (expand-file-name (car c) root)))
+                (if (cdr c) (setcdr c (expand-file-name (cdr c) root))))
+              res)
+        (nreverse res)))))
 
 (defun vc-git-delete-file (file)
   (vc-git-command nil 0 file "rm" "-f" "--"))
@@ -1909,6 +1982,7 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
 (defvar compilation-environment)
 
 ;; Derived from `lgrep'.
+;;;###autoload
 (defun vc-git-grep (regexp &optional files dir)
   "Run git grep, searching for REGEXP in FILES in directory DIR.
 The search is limited to file names matching shell pattern FILES.

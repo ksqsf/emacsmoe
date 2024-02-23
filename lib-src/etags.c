@@ -28,7 +28,7 @@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-Copyright (C) 1984, 1987-1989, 1993-1995, 1998-2023 Free Software
+Copyright (C) 1984, 1987-1989, 1993-1995, 1998-2024 Free Software
 Foundation, Inc.
 
 This file is not considered part of GNU Emacs.
@@ -109,6 +109,7 @@ University of California, as described above. */
 #include <limits.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <stdckdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysstdio.h>
@@ -978,8 +979,8 @@ Relative ones are stored relative to the output file's directory.\n");
     puts
       ("\tand create tags for extern variables unless --no-globals is used.");
 
-  puts ("In Mercury, tag both declarations starting a line with ':-' and first\n\
-        predicates or functions in clauses.");
+  puts ("\tIn Mercury, tag both declarations starting a line with ':-' and\n\
+        first predicates or functions in clauses.");
 
   if (CTAGS)
     puts ("-d, --defines\n\
@@ -3824,7 +3825,7 @@ C_entries (int c_ext,		/* extension of C */
 		    {
 		    case fstartlist:
 		      /* This prevents tagging fb in
-			 void (__attribute__((noreturn)) *fb) (void);
+			 void (__attribute__ ((noreturn)) *fb) (void);
 			 Fixing this is not easy and not very important. */
 		      fvdef = finlist;
 		      continue;
@@ -4379,14 +4380,14 @@ Yacc_entries (FILE *inf)
 
 #define LOOKING_AT(cp, kw)  /* kw is the keyword, a literal string */	\
   ((assert ("" kw), true)   /* syntax error if not a literal string */	\
-   && strneq ((cp), kw, sizeof (kw)-1)		/* cp points at kw */	\
+   && strneq (cp, kw, sizeof (kw) - 1)		/* cp points at kw */	\
    && notinname ((cp)[sizeof (kw)-1])		/* end of kw */		\
    && ((cp) = skip_spaces ((cp) + sizeof (kw) - 1), true)) /* skip spaces */
 
 /* Similar to LOOKING_AT but does not use notinname, does not skip */
 #define LOOKING_AT_NOCASE(cp, kw) /* the keyword is a literal string */	\
   ((assert ("" kw), true) /* syntax error if not a literal string */	\
-   && strncaseeq ((cp), kw, sizeof (kw)-1)	/* cp points at kw */	\
+   && strncaseeq (cp, kw, sizeof (kw) - 1)	/* cp points at kw */	\
    && ((cp) += sizeof (kw) - 1, true))		/* skip spaces */
 
 /*
@@ -8038,7 +8039,7 @@ xnmalloc (ptrdiff_t nitems, ptrdiff_t item_size)
   ptrdiff_t nbytes;
   assume (0 <= nitems);
   assume (0 < item_size);
-  if (INT_MULTIPLY_WRAPV (nitems, item_size, &nbytes))
+  if (ckd_mul (&nbytes, nitems, item_size))
     memory_full ();
   return xmalloc (nbytes);
 }
@@ -8049,7 +8050,7 @@ xnrealloc (void *pa, ptrdiff_t nitems, ptrdiff_t item_size)
   ptrdiff_t nbytes;
   assume (0 <= nitems);
   assume (0 < item_size);
-  if (INT_MULTIPLY_WRAPV (nitems, item_size, &nbytes) || SIZE_MAX < nbytes)
+  if (ckd_mul (&nbytes, nitems, item_size) || SIZE_MAX < nbytes)
     memory_full ();
   void *result = realloc (pa, nbytes);
   if (!result)

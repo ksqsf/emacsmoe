@@ -1,6 +1,6 @@
 @c -*- mode: texinfo; coding: utf-8 -*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--1999, 2001--2023 Free Software
+@c Copyright (C) 1990--1995, 1998--1999, 2001--2024 Free Software
 @c Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Functions
@@ -22,7 +22,7 @@ define them.
 * Function Cells::              Accessing or setting the function definition
                             of a symbol.
 * Closures::                    Functions that enclose a lexical environment.
-* OClosures::                   Function objects
+* OClosures::                   Function objects with meta-data.
 * Advising Functions::          Adding to the definition of a function.
 * Obsolete Functions::          Declaring functions obsolete.
 * Inline Functions::            Functions that the compiler will expand inline.
@@ -533,6 +533,40 @@ Instead, use the @code{advertised-calling-convention} declaration
 compiler emit a warning message when it compiles Lisp programs which
 use the deprecated calling convention.
 
+@ifnottex
+The @code{(fn)} feature is typically used in the following situations:
+
+@itemize @minus
+@item To spell out arguments and their purposes in a macro or a function.  Example:
+
+@example
+(defmacro lambda (&rest cdr)
+  "@dots{}
+\(fn ARGS [DOCSTRING] [INTERACTIVE] BODY)"@dots{})
+@end example
+
+@item To provide a more detailed description and names of arguments.  Example:
+
+@example
+(defmacro macroexp--accumulate (var+list &rest body)
+  "@dots{}
+\(fn (VAR LIST) BODY@dots{})"
+  (declare (indent 1))
+  (let ((var (car var+list))
+	  (list (cadr var+list))
+@dots{})))
+@end example
+
+@item To better explain the purpose of a @code{defalias}.  Example:
+
+@example
+(defalias 'abbrev-get 'get
+  "@dots{}
+\(fn ABBREV PROP)")
+@end example
+@end itemize
+@end ifnottex
+
 @cindex computed documentation string
 @kindex :documentation
 Documentation strings are usually static, but occasionally it can be
@@ -593,8 +627,8 @@ symbol a function definition, its function cell is said to be
   In practice, nearly all functions have names, and are referred to by
 their names.  You can create a named Lisp function by defining a
 lambda expression and putting it in a function cell (@pxref{Function
-Cells}).  However, it is more common to use the @code{defun} special
-form, described in the next section.
+Cells}).  However, it is more common to use the @code{defun} macro,
+described in the next section.
 @ifnottex
 @xref{Defining Functions}.
 @end ifnottex
@@ -948,8 +982,8 @@ lists) and call them using @code{funcall} or @code{apply}.  Functions
 that accept function arguments are often called @dfn{functionals}.
 
   Sometimes, when you call a functional, it is useful to supply a no-op
-function as the argument.  Here are two different kinds of no-op
-function:
+function as the argument.  Here are three different kinds of no-op
+functions:
 
 @defun identity argument
 This function returns @var{argument} and has no side effects.
@@ -1484,7 +1518,7 @@ the symbol as a function, Emacs signals a @code{void-function} error.
   Note that void is not the same as @code{nil} or the symbol
 @code{void}.  The symbols @code{nil} and @code{void} are Lisp objects,
 and can be stored into a function cell just as any other object can be
-(and they can be valid functions if you define them in turn with
+(and @code{void} can be a valid function if you define it with
 @code{defun}).  A void function cell contains no object whatsoever.
 
   You can test the voidness of a symbol's function definition with
@@ -1586,56 +1620,69 @@ examining or altering the structure of closure objects.
 
 @node OClosures
 @section Open Closures
+@cindex oclosures
+@cindex open closures
 
-Traditionally, functions are opaque objects which offer no other
-functionality but to call them.  Emacs Lisp functions aren't fully
+  Traditionally, functions are opaque objects which offer no other
+functionality but to call them.  (Emacs Lisp functions aren't fully
 opaque since you can extract some info out of them such as their
 docstring, their arglist, or their interactive spec, but they are
-mostly opaque.  This is usually what we want, but occasionally we need
-functions to expose a bit more information about themselves.
+still mostly opaque.)  This is usually what we want, but occasionally
+we need functions to expose a bit more information about themselves.
 
-OClosures are functions which carry additional type information,
-and expose some information in the form of slots which you can access
+  @dfn{Open closures}, or @dfn{OClosures} for short, are function
+objects which carry additional type information and expose some
+information about themselves in the form of slots which you can access
 via accessor functions.
 
-They are defined in two steps: first @code{oclosure-define} is used to
-define new OClosure types by specifying the slots carried by those
-OClosures, and then @code{oclosure-lambda} is used to create an
-OClosure object of a given type.
+ OClosures are defined in two steps: first you use
+@code{oclosure-define} to define a new OClosure type by specifying the
+slots carried by the OClosures of this type, and then you use
+@code{oclosure-lambda} to create an OClosure object of a given type.
 
-Say we want to define keyboard macros, i.e. interactive functions
-which re-execute a sequence of key events.  You could do it with
-a plain function as follows:
+Let's say we want to define keyboard macros, i.e.@: interactive
+functions which re-execute a sequence of key events (@pxref{Keyboard
+Macros}).  You could do it with a plain function as follows:
+
 @example
 (defun kbd-macro (key-sequence)
   (lambda (&optional arg)
     (interactive "P")
     (execute-kbd-macro key-sequence arg)))
 @end example
+
+@noindent
 But with such a definition there is no easy way to extract the
 @var{key-sequence} from that function, for example to print it.
 
 We can solve this problem using OClosures as follows.  First we define
 the type of our keyboard macros (to which we decided to add
 a @code{counter} slot while at it):
+
 @example
 (oclosure-define kbd-macro
   "Keyboard macro."
   keys (counter :mutable t))
 @end example
+
+@noindent
 After which we can rewrite our @code{kbd-macro} function:
+
 @example
 (defun kbd-macro (key-sequence)
   (oclosure-lambda (kbd-macro (keys key-sequence) (counter 0))
       (&optional arg)
-    (interactive "p")
+    (interactive "P")
     (execute-kbd-macro keys arg)
     (setq counter (1+ counter))))
 @end example
+
+@noindent
 As you can see, the @code{keys} and @code{counter} slots of the
 OClosure can be accessed as local variables from within the body
 of the OClosure.  But we can now also access them from outside of the
 body of the OClosure, for example to describe a keyboard macro:
+
 @example
 (defun describe-kbd-macro (km)
   (if (not (eq 'kbd-macro (oclosure-type km)))
@@ -1644,54 +1691,89 @@ body of the OClosure, for example to describe a keyboard macro:
           (counter (kbd-macro--counter km)))
       (message "Keys=%S, called %d times" keys counter))))
 @end example
+
+@noindent
 Where @code{kbd-macro--keys} and @code{kbd-macro--counter} are
-accessor functions generated by the @code{oclosure-define} macro.
+accessor functions generated by the @code{oclosure-define} macro for
+oclosures whose type is @code{kbd-macro}.
 
-@defmac oclosure-define name &optional docstring &rest slots
+@defmac oclosure-define oname &optional docstring &rest slots
 This macro defines a new OClosure type along with accessor functions
-for its slots.  @var{name} can be a symbol (the name of
-the new type), or a list of the form @code{(@var{name} . @var{type-props})} in
-which case @var{type-props} is a list of additional properties.
-@var{slots} is a list of slot descriptions where each slot can be
-either a symbol (the name of the slot) or it can be of the form
-@code{(@var{slot-name} . @var{slot-props})} where @var{slot-props} is
-a property list.
+for its @var{slots}.  @var{oname} can be a symbol (the name of the new
+type), or a list of the form
+@w{@code{(@var{oname} . @var{type-props})}}, in which case
+@var{type-props} is a list of additional properties of this oclosure
+type.  @var{slots} is a list of slot descriptions where each slot can
+be either a symbol (the name of the slot) or it can be of the form
+@w{@code{(@var{slot-name} . @var{slot-props})}}, where
+@var{slot-props} is a property list of the corresponding slot
+@var{slot-name}.
+The OClosure type's properties specified by @var{type-props} can
+include the following:
 
-For each slot, the macro creates an accessor function named
-@code{@var{name}--@var{slot-name}}.  By default slots are immutable.
-If you need a slot to be mutable, you need to specify it with the
-@code{:mutable} slot property, after which it can be mutated for
-example with @code{setf}.
+@table @code
+@item (:predicate @var{pred-name})
+This requests creation of a predicate function named @var{pred-name}.
+This function will be used to recognize OClosures of the type
+@var{oname}.  If this type property is not specified,
+@code{oclosure-define} will generate a default name for the
+predicate.
+@item (:parent @var{otype})
+This makes type @var{otype} of OClosures be the parent of the type
+@var{oname}.  The OClosures of type @var{oname} inherit the
+@var{slots} defined by their parent type.
+@c FIXME: Is the above description of :parent correct?
+@item (:copier @var{copier-name} @var{copier-args})
+This causes the definition of a functional update function, knows as
+the @dfn{copier}, which takes an OClosure of type @var{oname} as its
+first argument and returns a copy of it with the slots named in
+@var{copier-args} modified to contain the value passed in the
+corresponding argument in the actual call to @var{copier-name}.
+@end table
 
-Beside slot accessors, the macro can create a predicate and
-functional update functions according to @var{type-props}:
-a @code{(:predicate @var{pred-name})} in the @var{type-props} causes
-the definition of a predicate function under the name @var{pred-name},
-and @code{(:copier @var{copier-name} @var{copier-arglist})} causes the
-definition of a functional update function which takes an OClosure of
-type @var{name} as first argument and returns a copy of it with the
-slots named in @var{copier-arglist} modified to the value passed in the
-corresponding argument.
+For each slot in @var{slots}, the @code{oclosure-define} macro creates
+an accessor function named @code{@var{oname}--@var{slot-name}}; these
+can be used to access the values of the slots.  The slot definitions
+in @var{slots} can specify the following properties of the slots:
+
+@table @code
+@item :mutable @var{val}
+By default, slots are immutable, but if you specify the
+@code{:mutable} property with a non-@code{nil} value, the slot can be
+mutated, for example with @code{setf} (@pxref{Setting Generalized
+Variables}).
+@c FIXME: Some rationale and meaning of immutable slot is probably in
+@c order here.
+@item :type @var{val-type}
+This specifies the type of the values expected to appear in the slot.
+@c FIXME: What will happen if the value is of a different type? error?
+@end table
 @end defmac
 
 @defmac oclosure-lambda (type . slots) arglist &rest body
-This macro creates an anonymous OClosure of type @var{type}.
-@var{slots} should be a list of elements of the form @code{(@var{slot-name}
-@var{exp})}.
-At run time, each @var{exp} is evaluated, in order, after which
-the OClosure is created with its slots initialized with the
-resulting values.
+This macro creates an anonymous OClosure of type @var{type}, which
+should have been defined with @code{oclosure-define}.  @var{slots}
+should be a list of elements of the form
+@w{@code{(@var{slot-name} @var{expr})}}.  At run time, each @var{expr}
+is evaluated, in order, after which the OClosure is created with its
+slots initialized with the resulting values.
 
-When called as a function, the OClosure will accept arguments
-according to @var{arglist} and will execute the code in @var{body}.
-@var{body} can refer to the value of any of its slot directly as if it
-were a local variable that had been captured by static scoping.
+When called as a function (@pxref{Calling Functions}), the OClosure
+created by this macro will accept arguments according to @var{arglist}
+and will execute the code in @var{body}.  @var{body} can refer to the
+value of any of its slot directly as if it were a local variable that
+had been captured by static scoping.
 @end defmac
 
 @defun oclosure-type object
-This function returns the OClosure type (a symbol) of @var{object} if it is an
-OClosure, and @code{nil} otherwise.
+This function returns the OClosure type (a symbol) of @var{object} if
+it is an OClosure, and @code{nil} otherwise.
 @end defun
+
+One other function related to OClosures is
+@code{oclosure-interactive-form}, which allows some types of OClosures
+to compute their interactive forms dynamically.  @xref{Using
+Interactive, oclosure-interactive-form}.
 
 
 @node Advising Functions
@@ -1946,9 +2028,16 @@ advice.  Advice can also cause confusion in debugging, if the person doing the
 debugging does not notice or remember that the function has been modified
 by advice.
 
-  For these reasons, advice should be reserved for the cases where you
-cannot modify a function's behavior in any other way.  If it is
-possible to do the same thing via a hook, that is preferable
+  Note that the problems are not due to advice per se, but to the act
+of modifying a named function.  It is even more problematic to modify
+a named function via lower-level primitives like @code{fset},
+@code{defalias}, or @code{cl-letf}.  From that point of view, advice
+is the better way to modify a named function because it keeps track of
+the modifications, so they can be listed and undone.
+
+  Modifying a named function should be reserved for
+the cases where you cannot modify Emacs' behavior in any other way.
+If it is possible to do the same thing via a hook, that is preferable
 (@pxref{Hooks}).  If you simply want to change what a particular key
 does, it may be better to write a new command, and remap the old
 command's key bindings to the new one (@pxref{Remapping Commands}).
@@ -1977,9 +2066,10 @@ code) obey the advice and other calls (from C code) do not.
 
 @defmac define-advice symbol (where lambda-list &optional name depth) &rest body
 This macro defines a piece of advice and adds it to the function named
-@var{symbol}.  The advice is an anonymous function if @var{name} is
-@code{nil} or a function named @code{symbol@@name}.  See
-@code{advice-add} for explanation of other arguments.
+@var{symbol}.  If @var{name} is non-nil, the advice is named
+@code{@var{symbol}@@@var{name}} and installed with the name @var{name}; otherwise,
+the advice is anonymous.  See @code{advice-add} for explanation of
+other arguments.
 @end defmac
 
 @defun advice-add symbol where function &optional props
@@ -1988,10 +2078,12 @@ Add the advice @var{function} to the named function @var{symbol}.
 (@pxref{Core Advising Primitives}).
 @end defun
 
-@defun advice-remove symbol function
+@deffn Command advice-remove symbol function
 Remove the advice @var{function} from the named function @var{symbol}.
-@var{function} can also be the @code{name} of a piece of advice.
-@end defun
+@var{function} can also be the @code{name} of a piece of advice.  When
+called interactively, prompt for both an advised @var{function} and
+the advice to remove.
+@end deffn
 
 @defun advice-member-p function symbol
 Return non-@code{nil} if the advice @var{function} is already in the named
@@ -2129,7 +2221,7 @@ More specifically, the composition of the two functions behaves like:
 @findex defadvice
 @findex ad-activate
 
-A lot of code uses the old @code{defadvice} mechanism, which is largely made
+A lot of code uses the old @code{defadvice} mechanism, which has been made
 obsolete by the new @code{advice-add}, whose implementation and semantics is
 significantly simpler.
 
@@ -2309,14 +2401,19 @@ accepted three arguments, like this
   (sit-for seconds milliseconds nodisp)
 @end example
 
-However, calling @code{sit-for} this way is considered obsolete
-(@pxref{Waiting}).  The old calling convention is deprecated like
+During a transition period, the function accepted those three
+arguments, but declared this old calling convention as deprecated like
 this:
 
 @example
 (set-advertised-calling-convention
   'sit-for '(seconds &optional nodisp) "22.1")
 @end example
+
+@noindent
+The alternative to using this function is the
+@code{advertised-calling-convention} @code{declare} spec, see
+@ref{Declare Form}.
 @end defun
 
 @node Inline Functions
@@ -2493,6 +2590,7 @@ Each element in @var{specs} should have the form @code{(@var{property}
 following effects:
 
 @table @code
+@cindex @code{advertised-calling-convention} (@code{declare} spec)
 @item (advertised-calling-convention @var{signature} @var{when})
 This acts like a call to @code{set-advertised-calling-convention}
 (@pxref{Obsolete Functions}); @var{signature} specifies the correct
@@ -2518,6 +2616,7 @@ This is typically used for macros, though it works for functions too.
 Set the function's @code{interactive-only} property to @var{value}.
 @xref{The interactive-only property}.
 
+@cindex @code{obsolete} (@code{declare} spec)
 @item (obsolete @var{current-name} @var{when})
 Mark the function or macro as obsolete, similar to a call to
 @code{make-obsolete} (@pxref{Obsolete Functions}).  @var{current-name}
@@ -2559,14 +2658,18 @@ be passed to @code{gv-define-setter}.
 
 @item (completion @var{completion-predicate})
 Declare @var{completion-predicate} as a function to determine whether
-to include the symbol in the list of functions when asking for
-completions in @kbd{M-x}.  @var{completion-predicate} is called with
-two parameters: The first parameter is the symbol, and the second is
-the current buffer.
+to include a function's symbol in the list of functions when asking
+for completions in @kbd{M-x}.  This predicate function will only be
+called when @code{read-extended-command-predicate} is customized to
+@code{command-completion-default-include-p}; by default the value of
+@code{read-extended-command-predicate} is nil (@pxref{Interactive
+Call, execute-extended-command}).  The predicate
+@var{completion-predicate} is called with two arguments: the
+function's symbol and the current buffer.
 
 @item (modes @var{modes})
-Specify that this command is meant to be applicable for @var{modes}
-only.
+Specify that this command is meant to be applicable only to specified
+@var{modes}.  @xref{Command Modes}.
 
 @item (interactive-args @var{arg} ...)
 Specify the arguments that should be stored for @code{repeat-command}.
@@ -2581,6 +2684,12 @@ property of the function's symbol (@pxref{Standard Properties}).
 If @var{val} is non-@code{nil}, this function is free of side effects,
 so the byte compiler can ignore calls whose value is ignored.  This is
 the same as the @code{side-effect-free} property of the function's
+symbol, @pxref{Standard Properties}.
+
+@item (important-return-value @var{val})
+If @var{val} is non-@code{nil}, the byte compiler will warn about
+calls to this function that do not use the returned value.  This is the
+same as the @code{important-return-value} property of the function's
 symbol, @pxref{Standard Properties}.
 
 @item (speed @var{n})
@@ -2645,13 +2754,14 @@ byte compiler can check that the calls match the declaration.
 Tell the byte compiler to assume that @var{function} is defined in the
 file @var{file}.  The optional third argument @var{arglist} is either
 @code{t}, meaning the argument list is unspecified, or a list of
-formal parameters in the same style as @code{defun}.  An omitted
-@var{arglist} defaults to @code{t}, not @code{nil}; this is atypical
-behavior for omitted arguments, and it means that to supply a fourth
-but not third argument one must specify @code{t} for the third-argument
-placeholder instead of the usual @code{nil}.  The optional fourth
-argument @var{fileonly} non-@code{nil} means check only that
-@var{file} exists, not that it actually defines @var{function}.
+formal parameters in the same style as @code{defun} (including the
+parentheses).  An omitted @var{arglist} defaults to @code{t}, not
+@code{nil}; this is atypical behavior for omitted arguments, and it
+means that to supply a fourth but not third argument one must specify
+@code{t} for the third-argument placeholder instead of the usual
+@code{nil}.  The optional fourth argument @var{fileonly}
+non-@code{nil} means check only that @var{file} exists, not that it
+actually defines @var{function}.
 @end defmac
 
 @findex check-declare-file

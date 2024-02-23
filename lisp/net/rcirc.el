@@ -1,6 +1,6 @@
 ;;; rcirc.el --- default, simple IRC client          -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2005-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2005-2024 Free Software Foundation, Inc.
 
 ;; Author: Ryan Yeske <rcyeske@gmail.com>
 ;; Maintainers: Ryan Yeske <rcyeske@gmail.com>,
@@ -229,6 +229,12 @@ Uninteresting lines are those whose responses are listed in
 Used as the first arg to `format-time-string'."
   :type 'string)
 
+(defcustom rcirc-log-time-format "%d-%b %H:%M "
+  "Describes how timestamps are printed in the log files.
+Used as the first arg to `format-time-string'."
+  :version "30.1"
+  :type 'string )
+
 (defcustom rcirc-input-ring-size 1024
   "Size of input history ring."
   :type 'integer)
@@ -392,8 +398,9 @@ and the cdr part is used for encoding."
                                     (cons (coding-system :tag "Decode")
                                           (coding-system :tag "Encode")))))
 
-(defcustom rcirc-multiline-major-mode 'fundamental-mode
+(defcustom rcirc-multiline-major-mode #'text-mode
   "Major-mode function to use in multiline edit buffers."
+  :version "30.1"
   :type 'function)
 
 (defcustom rcirc-nick-completion-format "%s: "
@@ -584,7 +591,7 @@ If ARG is non-nil, instead prompt for connection parameters."
                   (condition-case nil
                       (let ((process (rcirc-connect server port nick user-name
                                                     full-name channels password encryption
-                                                    client-cert server-alias)))
+                                                    server-alias client-cert)))
                         (when rcirc-display-server-buffer
                           (pop-to-buffer-same-window (process-buffer process))))
                     (quit (message "Quit connecting to %s"
@@ -680,7 +687,7 @@ See `rcirc-connect' for more details on these variables.")
 ;;;###autoload
 (defun rcirc-connect (server &optional port nick user-name
                              full-name startup-channels password encryption
-                             certfp server-alias)
+                             server-alias certfp)
   "Connect to SERVER.
 The arguments PORT, NICK, USER-NAME, FULL-NAME, PASSWORD,
 ENCRYPTION, CERTFP, SERVER-ALIAS are interpreted as in
@@ -859,6 +866,7 @@ If QUIET is non-nil, no not emit a message."
       (if (rcirc--connection-open-p process)
           (throw 'exit (or quiet (message "Server process is alive")))
         (delete-process process))
+      (setq rcirc-user-authenticated nil)
       (let ((conn-info rcirc-connection-info))
         (setf (nth 5 conn-info)
               (cl-remove-if-not #'rcirc-channel-p
@@ -1233,9 +1241,9 @@ If SILENT is non-nil, do not print the message in any irc buffer."
   (let ((response (if noticep "NOTICE" "PRIVMSG")))
     (rcirc-get-buffer-create process target)
     (dolist (msg (rcirc-split-message message))
-      (rcirc-send-string process response target : msg)
       (unless silent
-        (rcirc-print process (rcirc-nick process) response target msg)))))
+        (rcirc-print process (rcirc-nick process) response target msg))
+      (rcirc-send-string process response target : msg))))
 
 (defvar-local rcirc-input-ring nil
   "Ring object for input.")
@@ -2034,7 +2042,7 @@ connection."
                (not (string= sender (rcirc-nick process))))
     (let* ((buffer (rcirc-target-buffer process sender response target text))
            (time (if-let ((time (rcirc-get-tag "time")))
-                     (parse-iso8601-time-string time)
+                     (parse-iso8601-time-string time t)
                    (current-time)))
            (inhibit-read-only t))
       (with-current-buffer buffer
@@ -2059,7 +2067,7 @@ connection."
                              (point-min)))
               (when (let ((then (get-text-property (point) 'rcirc-time)))
                       (and then (not (time-less-p time then))))
-                (next-single-property-change (point) 'hard)
+                (goto-char (next-single-property-change (point) 'hard))
                 (forward-char 1)
                 (throw 'exit nil))))
           (goto-char (line-beginning-position))
@@ -2204,10 +2212,10 @@ The message is logged in `rcirc-log', and is later written to
 disk.  PROCESS is the process object for the current connection."
   (let ((filename (funcall rcirc-log-filename-function process target))
         (time (and-let* ((time (rcirc-get-tag "time")))
-                (parse-iso8601-time-string time))))
+                (parse-iso8601-time-string time t))))
     (unless (null filename)
       (let ((cell (assoc-string filename rcirc-log-alist))
-            (line (concat (format-time-string rcirc-time-format time)
+            (line (concat (format-time-string rcirc-log-time-format time)
                           (substring-no-properties
                            (rcirc-format-response-string process sender
                                                          response target text))
@@ -2972,20 +2980,13 @@ keywords when no KEYWORD is given."
     browse-url-button-regexp)
   "Regexp matching URLs.  Set to nil to disable URL features in rcirc.")
 
-;; cf cl-remove-if-not
-(defun rcirc-condition-filter (condp lst)
-  "Remove all items not satisfying condition CONDP in list LST.
-CONDP is a function that takes a list element as argument and returns
-non-nil if that element should be included.  Returns a new list."
-  (delq nil (mapcar (lambda (x) (and (funcall condp x) x)) lst)))
-
 (defun rcirc-browse-url (&optional arg)
   "Prompt for URL to browse based on URLs in buffer before point.
 
 If ARG is given, opens the URL in a new browser window."
   (interactive "P")
   (let* ((point (point))
-         (filtered (rcirc-condition-filter
+         (filtered (seq-filter
                     (lambda (x) (>= point (cdr x)))
                     rcirc-urls))
          (completions (mapcar (lambda (x) (car x)) filtered))
@@ -2998,7 +2999,7 @@ If ARG is given, opens the URL in a new browser window."
   "Insert a timestamp."
   (goto-char (point-min))
   (let ((time (and-let* ((time (rcirc-get-tag "time")))
-                (parse-iso8601-time-string time))))
+                (parse-iso8601-time-string time t))))
     (insert (rcirc-facify (format-time-string rcirc-time-format time)
                           'rcirc-timestamp))))
 
@@ -4005,6 +4006,8 @@ PROCESS is the process object for the current connection."
 
 (define-obsolete-function-alias 'rcirc-format-strike-trough
   'rcirc-format-strike-through "30.1")
+
+(define-obsolete-function-alias 'rcirc-condition-filter #'seq-filter "30.1")
 
 (provide 'rcirc)
 

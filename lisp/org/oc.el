@@ -1,6 +1,6 @@
 ;;; oc.el --- Org Cite library                  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 ;; Author: Nicolas Goaziou <mail@nicolasgoaziou.fr>
 
@@ -52,7 +52,7 @@
 ;; through the "cite_export" keyword.
 
 ;; Eventually, this library provides some tools, mainly targeted at
-;; processor implementors.  Most are export-specific and are located
+;; processor implementers.  Most are export-specific and are located
 ;; in the "Tools only available during export" and "Tools generating
 ;; or operating on parsed data" sections.
 
@@ -1232,7 +1232,9 @@ from the processor set in `org-cite-activate-processor'."
       (let ((cite (org-with-point-at (match-beginning 0)
                     (org-element-citation-parser))))
         (when cite
-          (funcall activate cite)
+          ;; Do not alter match data as font-lock expects us to set it
+          ;; appropriately.
+          (save-match-data (funcall activate cite))
           ;; Move after cite object and make sure to return
           ;; a non-nil value.
           (goto-char (org-element-property :end cite)))))))

@@ -1,6 +1,6 @@
 /* This file implements an efficient interval data-structure.
 
-Copyright (C) 2017-2023 Free Software Foundation, Inc.
+Copyright (C) 2017-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -74,7 +74,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
    Consider the case where next-overlay-change is called at POS, all
    interval BEG positions are less than pos POS and all interval END
-   posistions are after.  These END positions have no order, and so
+   positions are after.  These END positions have no order, and so
    *every* interval must be examined.  This is at least O(N).  The
    previous-overlay-change case is similar.  The root issue is that
    the iterative "narrowing" approach is not guaranteed to reduce the
@@ -278,7 +278,7 @@ check_subtree (struct itree_node *node,
 
    This runs in constant time when ENABLE_OVERLAY_CHECKING is 0
    (i.e. Emacs is not configured with
-   "--enable_checking=yes,overlays").  In this mode it can't check all
+   "--enable-checking=yes,overlays").  In this mode it can't check all
    the invariants.  When ENABLE_OVERLAY_CHECKING is 1 it checks the
    entire tree and validates all invariants.
 */
@@ -817,14 +817,13 @@ itree_remove_fix (struct itree_tree *tree,
 	{
 	  struct itree_node *other = parent->right;
 
-	  if (null_safe_is_red (other)) /* case 1.a */
+	  if (other->red) /* case 1.a */
 	    {
 	      other->red = false;
 	      parent->red = true;
 	      itree_rotate_left (tree, parent);
 	      other = parent->right;
 	    }
-	  eassume (other != NULL);
 
 	  if (null_safe_is_black (other->left) /* 2.a */
 	      && null_safe_is_black (other->right))
@@ -855,14 +854,13 @@ itree_remove_fix (struct itree_tree *tree,
 	{
 	  struct itree_node *other = parent->left;
 
-	  if (null_safe_is_red (other)) /* 1.b */
+	  if (other->red) /* 1.b */
 	    {
 	      other->red = false;
 	      parent->red = true;
 	      itree_rotate_right (tree, parent);
 	      other = parent->left;
 	    }
-	  eassume (other != NULL);
 
 	  if (null_safe_is_black (other->right) /* 2.b */
 	      && null_safe_is_black (other->left))

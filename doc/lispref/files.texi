@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--1999, 2001--2023 Free Software
+@c Copyright (C) 1990--1995, 1998--1999, 2001--2024 Free Software
 @c Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Files
@@ -582,11 +582,12 @@ contents and inserting the whole file, because (1) it preserves some
 marker positions and (2) it puts less data in the undo list.
 
 It is possible to read a special file (such as a FIFO or an I/O
-device) with @code{insert-file-contents}, as long as @var{replace},
-and @var{visit} and @var{beg} are @code{nil}.  However, you should
-normally use an @var{end} argument for these files to avoid inserting
-(potentially) unlimited data into the buffer (for instance, when
-inserting data from @file{/dev/urandom}).
+device) with @code{insert-file-contents}, as long as @var{replace} is
+@code{nil} or @code{if-regular}, and @var{visit} and @var{beg} are
+@code{nil}.  However, you should normally use an @var{end} argument
+for these files to avoid inserting (potentially) unlimited data into
+the buffer (for instance, when inserting data from
+@file{/dev/urandom}).
 @end defun
 
 @defun insert-file-contents-literally filename &optional visit beg end replace
@@ -969,9 +970,16 @@ guaranteed to be writable.
 @end defmac
 
 @defun access-file filename string
+@vindex remote-file-name-access-timeout
 If you can read @var{filename} this function returns @code{nil};
 otherwise it signals an error
 using @var{string} as the error message text.
+
+If the user option @code{remote-file-name-access-timeout} is a
+positive number, the function signals an error when it doesn't finish
+after that time (in seconds).  This applies only to remote files, and
+only when there is no additional time spent while reading passwords or
+alike.
 @end defun
 
 @defun file-ownership-preserved-p filename &optional group
@@ -1795,7 +1803,7 @@ If @var{newname} exists, then it must be an empty directory if
 @var{oldname} is a directory and a non-directory otherwise.
 @end deffn
 
-@deffn Command copy-file oldname newname &optional ok-if-already-exists time preserve-uid-gid preserve-extended-attributes
+@deffn Command copy-file oldname newname &optional ok-if-already-exists time preserve-uid-gid preserve-permissions
 This command copies the file @var{oldname} to @var{newname}.  An
 error is signaled if @var{oldname} is not a regular file.  If @var{newname}
 names a directory, it copies @var{oldname} into that directory,
@@ -1863,9 +1871,10 @@ multiple names, it continues to exist under the other names.  If
 @var{filename} is a symbolic link, @code{delete-file} deletes only the
 symbolic link and not its target.
 
-A suitable kind of @code{file-error} error is signaled if the file
-does not exist, or is not deletable.  (On GNU and other POSIX-like
-systems, a file is deletable if its directory is writable.)
+The command signals a suitable kind of @code{file-error} error if
+@var{filename} cannot be deleted.  (On GNU and other POSIX-like
+systems, a file can be deleted if its directory is writable.)  If the
+file does not exist, this command will not signal any error.
 
 If the optional argument @var{trash} is non-@code{nil} and the
 variable @code{delete-by-moving-to-trash} is non-@code{nil}, this
@@ -3390,7 +3399,7 @@ first, before handlers for jobs such as remote file access.
 @code{file-directory-p},
 @code{file-equal-p},
 @code{file-executable-p}, @code{file-exists-p},
-@code{file-in-directory-p},
+@code{file-group-gid}, @code{file-in-directory-p},
 @code{file-local-copy}, @code{file-locked-p},
 @code{file-modes}, @code{file-name-all-completions},
 @code{file-name-as-directory},
@@ -3452,7 +3461,7 @@ first, before handlers for jobs such as remote file access.
 @code{file-direc@discretionary{}{}{}tory-p},
 @code{file-equal-p},
 @code{file-executable-p}, @code{file-exists-p},
-@code{file-in-directory-p},
+@code{file-group-gid}, @code{file-in-directory-p},
 @code{file-local-copy}, @code{file-locked-p},
 @code{file-modes}, @code{file-name-all-completions},
 @code{file-name-as-directory},
@@ -3623,7 +3632,11 @@ be @code{root}.
 If @var{connected} is non-@code{nil}, this function returns @code{nil}
 even if @var{filename} is remote, if Emacs has no network connection
 to its host.  This is useful when you want to avoid the delay of
-making connections when they don't exist.
+making connections when they don't exist.  If @var{connected} is
+@code{never}, @emph{never} use an existing connection to return the
+identification, even if one is already present (this is otherwise like
+a value of @code{nil}).  This lets you prevent any connection-specific
+logic, such as expanding the local part of the file name.
 @end defun
 
 @defun unhandled-file-name-directory filename
@@ -3686,6 +3699,17 @@ between consecutive checks.  For example:
                 (file-chase-links file)))))))
 @end example
 @end defopt
+
+@defmac without-remote-files body@dots{}
+The @code{without-remote-files} macro evaluates the @var{body} forms
+with deactivated file name handlers for remote files.  Those file
+names would be handled literally.
+
+The macro should be used only in forms where it is obvious, that
+remote files cannot appear or where it is intended not to handle
+remote file names.  It also reduces checks with
+@code{file-name-handler-alist}, resulting in more performant code.
+@end defmac
 
 @node Format Conversion
 @section File Format Conversion

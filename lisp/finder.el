@@ -1,8 +1,8 @@
 ;;; finder.el --- topic & keyword-based code finder  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2024 Free Software Foundation, Inc.
 
-;; Author: Eric S. Raymond <esr@snark.thyrsus.com>
+;; Author: Eric S. Raymond <esr@thyrsus.com>
 ;; Created: 16 Jun 1992
 ;; Keywords: help
 
@@ -68,10 +68,11 @@
     (processes	. "processes, subshells, and compilation")
     (terminals	. "text terminals (ttys)")
     (tex	. "the TeX document formatter")
+    (text	. "editing text files")
     (tools	. "programming tools")
     (unix	. "UNIX feature interfaces and emulators")
     (vc		. "version control")
-    (wp		. "word processing"))
+    (wp		. "use keyword `text' instead; this keyword is obsolete"))
   "Association list of the standard \"Keywords:\" headers.
 Each element has the form (KEYWORD . DESCRIPTION).")
 
@@ -147,7 +148,11 @@ would otherwise be.")
     ("gnus" . gnus)
     ("international" . emacs)
     ("language" . emacs)
+    ("leim" . emacs)
+    ("ja-dic" . emacs)
+    ("quail" . emacs)
     ("mh-e" . mh-e)
+    ("obsolete" . emacs)
     ("semantic" . semantic)
     ("analyze" . semantic)
     ("bovine" . semantic)
@@ -162,6 +167,7 @@ would otherwise be.")
     ("org"  . org)
     ("srecode" . srecode)
     ("term" . emacs)
+    ("use-package" . use-package)
     ("url"  . url))
   "Alist of built-in package directories.
 Each element should have the form (DIR . PACKAGE), where DIR is a

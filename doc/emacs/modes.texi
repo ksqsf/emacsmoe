@@ -1,6 +1,6 @@
 @c -*- coding: utf-8 -*-
 @c This is part of the Emacs manual.
-@c Copyright (C) 1985--1987, 1993--1995, 1997, 2000--2023 Free Software
+@c Copyright (C) 1985--1987, 1993--1995, 1997, 2000--2024 Free Software
 @c Foundation, Inc.
 @c See file emacs.texi for copying conditions.
 @node Modes
@@ -473,9 +473,12 @@ specify which mode you prefer.
   If you have changed the major mode of a buffer, you can return to
 the major mode Emacs would have chosen automatically, by typing
 @kbd{M-x normal-mode}.  This is the same function that
-@code{find-file} calls to choose the major mode.  It also processes
-the file's @samp{-*-} line or local variables list (if any).
-@xref{File Variables}.
+@code{find-file} calls to choose the major mode.  If the buffer is
+visiting a file, this command also processes the file's @samp{-*-}
+line and file-local variables list (if any).  @xref{File Variables}.
+If the buffer doesn't visit a file, the command processes only the
+major mode specification, if any, in the @samp{-*-} line and in the
+file-local variables list.
 
 @vindex change-major-mode-with-file-name
   The commands @kbd{C-x C-w} and @code{set-visited-file-name} change to

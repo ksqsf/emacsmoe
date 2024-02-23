@@ -1,6 +1,6 @@
 ;;; ange-ftp.el --- transparent FTP support for GNU Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1989-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1989-2024 Free Software Foundation, Inc.
 
 ;; Author: Andy Norman <ange@hplb.hpl.hp.com>
 ;; Maintainer: emacs-devel@gnu.org
@@ -2164,7 +2164,7 @@ Create a new process if needed."
       proc)))
 
 (defun ange-ftp-passive-mode (proc on-or-off)
-  (if (string-match (concat "Passive mode " on-or-off)
+  (if (string-match (concat "Passive mode:? " on-or-off)
                     (cdr (ange-ftp-raw-send-cmd
                           proc (concat "passive " on-or-off)
                           "Trying passive mode..." nil)))
@@ -2850,7 +2850,8 @@ NO-ERROR, if a listing for DIRECTORY cannot be obtained."
 				   (ange-ftp-switches-ok dired-actual-switches))
 			      (and (boundp 'dired-listing-switches)
 				   (ange-ftp-switches-ok
-				    dired-listing-switches))
+				    (connection-local-value
+                                     dired-listing-switches)))
 			      "-al")
 			  t no-error)
 	     (gethash directory ange-ftp-files-hashtable)))))
@@ -4233,7 +4234,7 @@ directory, so that Emacs will know its current contents."
 	 (host (nth 0 parsed))
 	 (user (nth 1 parsed))
 	 (localname (nth 2 parsed)))
-    (and (or (not connected)
+    (and (or (memq connected '(nil never))
 	     (let ((proc (get-process (ange-ftp-ftp-process-buffer host user))))
 	       (and proc (processp proc)
 		    (memq (process-status proc) '(run open)))))
@@ -4242,6 +4243,7 @@ directory, so that Emacs will know its current contents."
 	  ((eq identification 'user) user)
 	  ((eq identification 'host) host)
 	  ((eq identification 'localname) localname)
+	  ((eq identification 'hop) nil)
 	  (t (ange-ftp-replace-name-component file ""))))))
 
 (defun ange-ftp-load (file &optional noerror nomessage nosuffix must-suffix)
@@ -4381,7 +4383,11 @@ NEWNAME should be the name to give the new compressed or uncompressed file.")
       (ange-ftp-real-find-backup-file-name fn)))
 
 (defun ange-ftp-file-user-uid ()
-  ;; Return "don't  know" value.
+  ;; Return "don't know" value.
+  -1)
+
+(defun ange-ftp-file-group-gid ()
+  ;; Return "don't know" value.
   -1)
 
 ;;; Define the handler for special file names
@@ -4397,40 +4403,6 @@ NEWNAME should be the name to give the new compressed or uncompressed file.")
 	      (save-match-data (apply fn args)))
 	  (error (signal (car err) (cdr err))))
       (ange-ftp-run-real-handler operation args))))
-
-;; The following code is commented out because Tramp now deals with
-;; Ange-FTP filenames, too.
-
-;;-;;; This regexp takes care of real ange-ftp file names (with a slash
-;;-;;; and colon).
-;;-;;; Don't allow the host name to end in a period--some systems use /.:
-;;-;;;###autoload
-;;-(or (assoc "^/[^/:]*[^/:.]:" file-name-handler-alist)
-;;-    (setq file-name-handler-alist
-;;-	  (cons '("^/[^/:]*[^/:.]:" . ange-ftp-hook-function)
-;;-		file-name-handler-alist)))
-;;-
-;;-;;; This regexp recognizes absolute filenames with only one component,
-;;-;;; for the sake of hostname completion.
-;;-;;;###autoload
-;;-(or (assoc "^/[^/:]*\\'" file-name-handler-alist)
-;;-    (setq file-name-handler-alist
-;;-	  (cons '("^/[^/:]*\\'" . ange-ftp-completion-hook-function)
-;;-		file-name-handler-alist)))
-;;-
-;;-;;; This regexp recognizes absolute filenames with only one component
-;;-;;; on Windows, for the sake of hostname completion.
-;;-;;; NB. Do not mark this as autoload, because it is very common to
-;;-;;; do completions in the root directory of drives on Windows.
-;;-(and (memq system-type '(ms-dos windows-nt))
-;;-     (or (assoc "^[a-zA-Z]:/[^/:]*\\'" file-name-handler-alist)
-;;-	 (setq file-name-handler-alist
-;;-	       (cons '("^[a-zA-Z]:/[^/:]*\\'" .
-;;-		       ange-ftp-completion-hook-function)
-;;-		     file-name-handler-alist))))
-
-;;; The above two forms are sufficient to cause this file to be loaded
-;;; if the user ever uses a file name with a colon in it.
 
 ;;; This sets the mode
 (add-hook 'find-file-hook 'ange-ftp-set-buffer-mode)
@@ -4524,8 +4496,9 @@ NEWNAME should be the name to give the new compressed or uncompressed file.")
 (put 'file-notify-rm-watch 'ange-ftp 'ignore)
 (put 'file-notify-valid-p 'ange-ftp 'ignore)
 
-;; Return the "don't know' value for remote user uid.
+;; Return the "don't know" value for remote user uid and group gid.
 (put 'file-user-uid 'ange-ftp 'ange-ftp-file-user-uid)
+(put 'file-group-gid 'ange-ftp 'ange-ftp-file-group-gid)
 
 ;;; Define ways of getting at unmodified Emacs primitives,
 ;;; turning off our handler.

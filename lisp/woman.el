@@ -1,6 +1,6 @@
 ;;; woman.el --- browse UN*X manual pages `wo (without) man'  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Francis J. Wright <F.J.Wright@qmul.ac.uk>
 ;; Maintainer: emacs-devel@gnu.org
@@ -33,6 +33,10 @@
 ;; ?roff requests that are most commonly used in man pages.  However,
 ;; the emulation is modified to include the reformatting done by the
 ;; Emacs `man' command.  No hyphenation is performed.
+
+;; Note that `M-x woman' doesn’t yet support the latest features of
+;; modern man pages, so we recommend using `M-x man' if that is
+;; available on your system.
 
 ;; Advantages
 
@@ -1149,7 +1153,11 @@ speed.  With a prefix argument, force the caches to be
 updated (e.g. to re-interpret the current directory).
 
 Used non-interactively, arguments are optional: if given then TOPIC
-should be a topic string and non-nil RE-CACHE forces re-caching."
+should be a topic string and non-nil RE-CACHE forces re-caching.
+
+Note that `M-x woman' doesn’t yet support the latest features of
+modern man pages, so we recommend using `M-x man' if that is
+available on your system."
   (interactive (list nil current-prefix-arg))
   ;; The following test is for non-interactive calls via emacsclient, etc.
   (if (or (not (stringp topic)) (string-match-p "\\S " topic))
@@ -1338,8 +1346,8 @@ PATH-DIRS should be a list of general manual directories (like
 manual directory regexps (like `woman-path').
 Ignore any paths that are unreadable or not directories."
   ;; Allow each path to be a single string or a list of strings:
-  (if (not (listp path-dirs)) (setq path-dirs (list path-dirs)))
-  (if (not (listp path-regexps)) (setq path-regexps (list path-regexps)))
+  (setq path-dirs (ensure-list path-dirs))
+  (setq path-regexps (ensure-list path-regexps))
   (let (head dirs path)
     (dolist (dir path-dirs)
       (when (consp dir)
@@ -1846,7 +1854,6 @@ Argument EVENT is the invoking mouse event."
 
 (defun woman-reset-emulation (value)
   "Reset `woman-emulation' to VALUE and reformat, for menu use."
-  (interactive)
   (setq woman-emulation value)
   (woman-reformat-last-file))
 
@@ -2081,8 +2088,6 @@ European characters."
 
 
 ;;; The main decoding driver:
-
-(defvar font-lock-mode)			; for the compiler
 
 (defun woman-decode-buffer ()
   "Decode a buffer in UN*X man-page source format.
@@ -2561,7 +2566,8 @@ If DELETE is non-nil then delete from point."
 		       ;; "\\(\\\\{\\)\\|\\(\n[.']\\)?[ \t]*\\\\}[ \t]*"
 		       ;; Interpret bogus `el \}' as `el \{',
 		       ;; especially for Tcl/Tk man pages:
-		       "\\(\\\\{\\|el[ \t]*\\\\}\\)\\|\\(\n[.']\\)?[ \t]*\\\\}[ \t]*")
+		       "\\(\\\\{\\|el[ \t]*\\\\}\\)\\|\\(\n[.']\\)?[ \t]*\\\\}[ \t]*"
+                       nil t)
 		      (match-beginning 1))
 	       (re-search-forward "\\\\}"))
 	     (delete-region (if delete from (match-beginning 0)) (point))

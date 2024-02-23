@@ -1,5 +1,5 @@
 @c This is part of the Emacs manual.
-@c Copyright (C) 1985--1987, 1993--1995, 1997, 1999--2023 Free Software
+@c Copyright (C) 1985--1987, 1993--1995, 1997, 1999--2024 Free Software
 @c Foundation, Inc.
 @c See file emacs.texi for copying conditions.
 @node Files
@@ -372,12 +372,12 @@ you could say:
       '(("src/emacs/[^/]+/\\(.*\\)\\'" "src/emacs/.*/\\1")))
 @end lisp
 
-As you can see, this is a list of @var{(MATCH EXPANSION...)} elements.
-The @var{match} is a regular expression that matches the visited file
-name, and each @var{expansion} may refer to match groups by using
-@samp{\\1} and so on.  The resulting expansion string is then applied
-to the file system to see if any files match this expansion
-(interpreted as a regexp).
+As you can see, this is a list of @w{@code{(@var{MATCH}
+@var{EXPANSION}...)}} elements.  The @var{match} is a regular
+expression that matches the visited file name, and each
+@var{expansion} may refer to match groups by using @samp{\\1} and so
+on.  The resulting expansion string is then applied to the file system
+to see if any files match this expansion (interpreted as a regexp).
 
 @vindex find-file-hook
 @vindex find-file-not-found-functions
@@ -546,6 +546,10 @@ buffer name with the buffer's default directory (@pxref{File Names}).
   If the new file name implies a major mode, then @kbd{C-x C-w} switches
 to that major mode, in most cases.  The command
 @code{set-visited-file-name} also does this.  @xref{Choosing Modes}.
+
+   If you wish to save the current buffer to a different file without
+visiting that file, use @code{mark-whole-buffer} (@kbd{C-x h}), then
+@w{@kbd{M-x write-region}} (@pxref{Misc File Ops}).
 
   If Emacs is about to save a file and sees that the date of the latest
 version on disk does not match what Emacs last read or wrote, Emacs
@@ -1057,6 +1061,7 @@ revert it automatically if it has changed---provided the buffer itself
 is not modified.  (If you have edited the text, it would be wrong to
 discard your changes.)
 
+@kindex C-x x g
 @vindex revert-buffer-quick-short-answers
 @findex revert-buffer-quick
   The @kbd{C-x x g} keystroke is bound to the
@@ -1324,6 +1329,10 @@ C-x C-s
 directory listing describing the specified file and the auto-save file,
 so you can compare their sizes and dates.  If the auto-save file
 is older, @kbd{M-x recover-file} does not offer to read it.
+
+When @kbd{M-x recover-file} asks for confirmation, if you answer with
+@kbd{diff} or @kbd{=}, it shows the diffs between @var{file} and its
+auto-save file @file{#@var{file}#} and reprompts you for confirmation.
 
 @findex recover-session
   If Emacs or the computer crashes, you can recover all the files you
@@ -2093,10 +2102,11 @@ Otherwise, Emacs uses @command{ssh}.
 @end enumerate
 
 @cindex disabling remote files
+@cindex inhibit-remote-files
 @noindent
-You can entirely turn off the remote file name feature by setting the
-variable @code{tramp-mode} to @code{nil}.  You can turn off the
-feature in individual cases by quoting the file name with @samp{/:}
+You can entirely turn off the remote file name feature by running
+@kbd{M-x inhibit-remote-files}.  You can turn off the feature in
+individual cases by quoting the file name with @samp{/:}
 (@pxref{Quoted File Names}).
 
 @cindex @code{ange-ftp}
@@ -2255,6 +2265,12 @@ to visit one of these files.  @kbd{M-x recentf-save-list} saves the
 current @code{recentf-list} to a file, and @kbd{M-x recentf-edit-list}
 edits it.
 
+@vindex remote-file-name-access-timeout
+  If you use remote files, you might also consider customizing
+@code{remote-file-name-access-timeout}, which is the number of
+seconds after which the check whether a remote file shall be used
+in Recentf is stopped.  This prevents Emacs being blocked.
+
 @c FIXME partial-completion-mode (complete.el) is obsolete.
   The @kbd{M-x ffap} command generalizes @code{find-file} with more
 powerful heuristic defaults (@pxref{FFAP}), often based on the text at
@@ -2289,10 +2305,15 @@ behavior by using the options @code{image-auto-resize} and
 @code{image-auto-resize-on-window-resize}.
 
 @findex image-transform-fit-to-window
+@kindex s w (Image mode)
 @findex image-transform-set-percent
+@kindex s p (Image mode)
 @findex image-transform-set-scale
+@kindex s s (Image mode)
 @findex image-transform-reset-to-initial
+@kindex s 0 (Image mode)
 @findex image-transform-reset-to-original
+@kindex s o (Image mode)
 To resize the image manually you can use the command
 @code{image-transform-fit-to-window} bound to @kbd{s w} that fits the
 image to both the window height and width.  To scale the image to a
@@ -2352,6 +2373,94 @@ frames at once.  You can go to a specific frame with @kbd{F}
 @kbd{a -} (@code{image-decrease-speed}) decreases it, and @kbd{a r}
 (@code{image-reverse-speed}) reverses it.  The command @kbd{a 0}
 (@code{image-reset-speed}) resets the speed to the original value.
+
+In addition to the above key bindings, which are specific to Image
+mode, images shown in any Emacs buffer have special key bindings when
+point is at or inside the image:
+
+@table @kbd
+@cindex resize images
+@cindex image resize
+@findex image-increase-size
+@kindex i + (Image mode)
+@item i +
+Increase the image size (@code{image-increase-size}) by 20%.  Prefix
+numeric argument controls the increment; the value of @var{n} means to
+multiply the size by the factor of @w{@code{1 + @var{n} / 10}}, so
+@w{@kbd{C-u 5 i +}} means to increase the size by 50%.
+
+@findex image-decrease-size
+@kindex i - (Image mode)
+@item i -
+Decrease the image size (@code{image-increase-size}) by 20%.  Prefix
+numeric argument controls the decrement; the value of @var{n} means to
+multiply the size by the factor of @w{@code{1 - @var{n} / 10}}, so
+@w{@kbd{C-u 3 i -}} means to decrease the size by 30%.
+
+@cindex rotating images
+@cindex image rotation
+@findex image-rotate
+@kindex i r (Image mode)
+@item i r
+Rotate the image by 90 degrees clockwise (@code{image-rotate}).
+With the prefix argument, rotate by 90 degrees counter-clockwise instead.
+Note that this command is not available for sliced images.
+
+@findex image-flip-horizontally
+@kindex i h (Image mode)
+@item i h
+Flip the image horizontally (@code{image-flip-horizontally}).  This
+presents the image as if reflected in a vertical mirror.
+Note that this command is not available for sliced images.
+
+@findex image-flip-vertically
+@kindex i v (Image mode)
+@item i v
+Flip the image vertically (@code{image-flip-vertically}).  This
+presents the image as if reflected in a horizontal mirror.
+Note that this command is not available for sliced images.
+
+@findex image-save
+@kindex i o (Image mode)
+@item i o
+Save the image to a file (@code{image-save}).  This command prompts
+you for the name of the file to save the image.
+
+@cindex cropping images
+@vindex image-crop-crop-command
+@findex image-crop
+@kindex i c (Image mode)
+@item i c
+Crop the image (@code{image-crop}).  This command is available only if
+your system has an external program installed that can be used for
+cropping and cutting of images; the user option
+@code{image-crop-crop-command} determines what program to use, and
+defaults to the ImageMagick's @command{convert} program.  The command
+displays the image with a rectangular frame superimposed on it, and
+lets you use the mouse to move and resize the frame.  Type @kbd{m} to
+cause mouse movements to move the frame instead of resizing it; type
+@kbd{s} to move a square frame instead.  When you are satisfied with
+the position and size of the cropping frame, type @kbd{@key{RET}} to
+actually crop the part under the frame; or type @kbd{q} to exit
+without cropping.  You can then save the cropped image using @w{@kbd{i
+o}} or @w{@kbd{M-x image-save}}.
+
+@findex image-cut
+@kindex i x (Image mode)
+@vindex image-cut-color
+@vindex image-crop-cut-command
+@item i x
+Cut a rectangle from the image (@code{image-cut}).  This works the
+same as @code{image-crop} (and also requires an external program,
+defined by the variable @code{image-crop-cut-command}, to perform the
+image cut), but instead of cropping the image, it removes the part
+inside the frame and fills that part with the color specified by
+@code{image-cut-color}.  With prefix argument, the command prompts for
+the color to use.
+@end table
+
+The size and rotation commands are ``repeating'', which means that you
+can continue adjusting the image without using the @kbd{i} prefix.
 
 @cindex ImageMagick support
 @vindex imagemagick-enabled-types

@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1994, 2001--2023 Free Software Foundation, Inc.
+@c Copyright (C) 1990--1994, 2001--2024 Free Software Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Byte Compilation
 @chapter Byte Compilation
@@ -35,7 +35,6 @@ variable binding for @code{no-byte-compile} into it, like this:
 * Speed of Byte-Code::          An example of speedup from byte compilation.
 * Compilation Functions::       Byte compilation functions.
 * Docs and Compilation::        Dynamic loading of documentation strings.
-* Dynamic Loading::             Dynamic loading of individual functions.
 * Eval During Compile::         Code to be evaluated when you compile.
 * Compiler Errors::             Handling compiler error messages.
 * Byte-Code Objects::           The data type used for byte-compiled functions.
@@ -289,71 +288,6 @@ stands for the name of this file, as a string.  Do not use these
 constructs in Lisp source files; they are not designed to be clear to
 humans reading the file.
 
-@node Dynamic Loading
-@section Dynamic Loading of Individual Functions
-
-@cindex dynamic loading of functions
-@cindex lazy loading
-  When you compile a file, you can optionally enable the @dfn{dynamic
-function loading} feature (also known as @dfn{lazy loading}).  With
-dynamic function loading, loading the file doesn't fully read the
-function definitions in the file.  Instead, each function definition
-contains a place-holder which refers to the file.  The first time each
-function is called, it reads the full definition from the file, to
-replace the place-holder.
-
-  The advantage of dynamic function loading is that loading the file
-should become faster.  This is a good thing for a file which contains
-many separate user-callable functions, if using one of them does not
-imply you will probably also use the rest.  A specialized mode which
-provides many keyboard commands often has that usage pattern: a user may
-invoke the mode, but use only a few of the commands it provides.
-
-  The dynamic loading feature has certain disadvantages:
-
-@itemize @bullet
-@item
-If you delete or move the compiled file after loading it, Emacs can no
-longer load the remaining function definitions not already loaded.
-
-@item
-If you alter the compiled file (such as by compiling a new version),
-then trying to load any function not already loaded will usually yield
-nonsense results.
-@end itemize
-
-  These problems will never happen in normal circumstances with
-installed Emacs files.  But they are quite likely to happen with Lisp
-files that you are changing.  The easiest way to prevent these problems
-is to reload the new compiled file immediately after each recompilation.
-
-  @emph{Experience shows that using dynamic function loading provides
-benefits that are hardly measurable, so this feature is deprecated
-since Emacs 27.1.}
-
-  The byte compiler uses the dynamic function loading feature if the
-variable @code{byte-compile-dynamic} is non-@code{nil} at compilation
-time.  Do not set this variable globally, since dynamic loading is
-desirable only for certain files.  Instead, enable the feature for
-specific source files with file-local variable bindings.  For example,
-you could do it by writing this text in the source file's first line:
-
-@example
--*-byte-compile-dynamic: t;-*-
-@end example
-
-@defvar byte-compile-dynamic
-If this is non-@code{nil}, the byte compiler generates compiled files
-that are set up for dynamic function loading.
-@end defvar
-
-@defun fetch-bytecode function
-If @var{function} is a byte-code function object, this immediately
-finishes loading the byte code of @var{function} from its
-byte-compiled file, if it is not fully loaded already.  Otherwise,
-it does nothing.  It always returns @var{function}.
-@end defun
-
 @node Eval During Compile
 @section Evaluation During Compilation
 @cindex eval during compilation
@@ -422,7 +356,7 @@ execution of the compiled file.  For example,
 @lisp
 (eval-when-compile
   (unless (fboundp 'some-new-thing)
-    (defmacro 'some-new-thing ()
+    (defmacro some-new-thing ()
       (compatibility code))))
 @end lisp
 
@@ -801,9 +735,9 @@ Compilation, the previous chapter}, Emacs can also optionally compile
 Lisp function definitions into a true compiled code, known as
 @dfn{native code}.  This feature uses the @file{libgccjit} library,
 which is part of the GCC distribution, and requires that Emacs be
-built with support for using that library.  It also requires to have
-GCC and Binutils (the assembler and linker) available on your system
-for you to be able to native-compile Lisp code.
+built with support for using that library.  It also requires GCC and
+Binutils (the assembler and linker) to be available on your system for
+you to be able to native-compile Lisp code.
 
 @vindex native-compile@r{, a Lisp feature}
   To determine whether the current Emacs process can produce and load
@@ -831,9 +765,9 @@ produced by earlier or later Emacs versions; native compilation of the
 same Lisp code by a different Emacs version will usually produce a
 natively-compiled library under a unique file name that only that
 version of Emacs will be able to load.  However, the use of unique
-file names allows to have in the same directory several versions of
-the same Lisp library natively-compiled by several different versions
-of Emacs.
+file names enables several versions of the same Lisp library
+natively-compiled by several different versions of Emacs to be placed
+within the same directory.
 
 @vindex no-native-compile
   A non-@code{nil} file-local variable binding of
@@ -854,7 +788,10 @@ that the latter technique might still produce a small number of
 @file{*.eln} files if Emacs needs to generate @dfn{trampolines}, which
 are used if Lisp primitives are advised or redefined in your Lisp code
 that is being natively compiled.  @xref{Native-Compilation Variables,
-trampolines}.
+trampolines}.  Alternatively, you can specify that the @file{*.eln}
+files are written to a non-default directory using the
+@code{startup-redirect-eln-cache} function; @pxref{Native-Compilation
+Functions}.
 
 @menu
 * Native-Compilation Functions::  Functions to natively-compile Lisp.
@@ -875,8 +812,7 @@ well.
    You can natively-compile either a single function or macro
 definition, or a whole file of Lisp code, with the
 @code{native-compile} function.  Natively-compiling a file will
-produce both the corresponding @file{.elc} file with byte code and the
-@file{.eln} file with native code.
+produce the @file{.eln} file with native code.
 
 @findex native-comp-limple-mode
 @vindex native-comp-verbose
@@ -968,6 +904,18 @@ compilation subprocesses in parallel, under the control of
 Variables}).
 @end defun
 
+@deffn Command emacs-lisp-native-compile
+This command compiles the file visited by the current buffer into
+native code, if the file was changed since the last time it was
+natively-compiled.
+@end deffn
+
+@deffn Command emacs-lisp-native-compile-and-load
+This command compiles the file visited by the current buffer into
+native code, like @code{emacs-lisp-native-compile}, but it also loads
+the native code when the compilation finishes.
+@end deffn
+
   The following function allows Lisp programs to test whether
 native-compilation is available at runtime.
 
@@ -977,6 +925,22 @@ the native-compilation support compiled into it.  On systems that load
 @file{libgccjit} dynamically, it also makes sure that library is
 available and can be loaded.  Lisp programs that need to know up front
 whether native-compilation is available should use this predicate.
+@end defun
+
+  By default, asynchronous native compilation writes the @file{*.eln}
+files it produces to a subdirectory of the first writable directory
+specified by the @code{native-comp-eln-load-path} variable
+(@pxref{Native-Compilation Variables}).  You can change this by using
+the following function in your startup files:
+
+@defun startup-redirect-eln-cache cache-directory
+This function arranges for the asynchronous native compilation to
+write the produced @file{*.eln} files to @var{cache-directory}, which
+must be a single directory, a string.  It also destructively modifies
+@code{native-comp-eln-load-path} such that its first element is
+@var{cache-directory}.  If @var{cache-directory} is not an absolute
+file name, it is interpreted relative to @code{user-emacs-directory}
+(@pxref{Init File}).
 @end defun
 
 @node Native-Compilation Variables
@@ -1097,7 +1061,7 @@ functions provided by the @file{.elc} file.
 @end defvar
 
 @cindex trampolines, in native compilation
-  Setting the value of @code{native-comp-jit-compilation} to@code{nil}
+  Setting the value of @code{native-comp-jit-compilation} to @code{nil}
 disables JIT native compilation.  However, even when JIT native
 compilation is disabled, Emacs might still need to start asynchronous
 native compilation subprocesses to produce @dfn{trampolines}.  To

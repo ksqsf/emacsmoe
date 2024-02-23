@@ -1,10 +1,10 @@
 ;;; paragraphs.el --- paragraph and sentence parsing  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1991, 1994-1997, 1999-2023 Free Software
+;; Copyright (C) 1985-1987, 1991, 1994-1997, 1999-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
-;; Keywords: wp
+;; Keywords: text
 ;; Package: emacs
 
 ;; This file is part of GNU Emacs.
@@ -201,7 +201,6 @@ This is desirable in modes where blank lines are the paragraph delimiters."
   :type 'boolean
   :safe #'booleanp)
 
-;; Silence the compiler.
 (defun forward-paragraph (&optional arg)
   "Move forward to end of paragraph.
 With argument ARG, do it ARG times;
@@ -476,8 +475,7 @@ sentences.  Also, every paragraph boundary terminates sentences as well."
 	    (skip-chars-backward " \t\n")
 	  (goto-char par-end)))
       (setq arg (1- arg)))
-    (let ((npoint (constrain-to-field nil opoint t)))
-      (not (= npoint opoint)))))
+    (constrain-to-field nil opoint t)))
 
 (defvar forward-sentence-function #'forward-sentence-default-function
   "Function to be used to calculate sentence movements.
@@ -499,8 +497,13 @@ sentence.  Delegates its work to `forward-sentence-function'."
       (save-restriction
         (narrow-to-region start end)
         (goto-char (point-min))
-	(while (ignore-errors (forward-sentence))
-	  (setq sentences (1+ sentences)))
+        (let* ((prev (point))
+               (next (forward-sentence)))
+          (while (and (not (null next))
+                      (not (= prev next)))
+            (setq prev next
+                  next (ignore-errors (forward-sentence))
+                  sentences (1+ sentences))))
         ;; Remove last possibly empty sentence
         (when (/= (skip-chars-backward " \t\n") 0)
           (setq sentences (1- sentences)))

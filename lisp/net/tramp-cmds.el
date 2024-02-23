@@ -1,6 +1,6 @@
 ;;; tramp-cmds.el --- Interactive commands for Tramp  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2007-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: comm, processes
@@ -31,6 +31,8 @@
 (require 'tramp)
 
 ;; Pacify byte-compiler.
+(declare-function dired-advertise "dired")
+(declare-function dired-unadvertise "dired")
 (declare-function mml-mode "mml")
 (declare-function mml-insert-empty-tag "mml")
 (declare-function reporter-dump-variable "reporter")
@@ -52,6 +54,7 @@ SYNTAX can be one of the symbols `default' (default),
   (when syntax
     (customize-set-variable 'tramp-syntax syntax)))
 
+;; Use `match-buffers' starting with Emacs 29.1.
 ;;;###tramp-autoload
 (defun tramp-list-tramp-buffers ()
   "Return a list of all Tramp connection buffers."
@@ -63,6 +66,7 @@ SYNTAX can be one of the symbols `default' (default),
    (all-completions
     "*trace tramp" (mapcar #'list (mapcar #'buffer-name (buffer-list))))))
 
+;; Use `match-buffers' starting with Emacs 29.1.
 ;;;###tramp-autoload
 (defun tramp-list-remote-buffers ()
   "Return a list of all buffers with remote `default-directory'."
@@ -72,6 +76,8 @@ SYNTAX can be one of the symbols `default' (default),
     (lambda (x)
       (when (tramp-tramp-file-p (tramp-get-default-directory x)) x))
     (buffer-list))))
+
+;;; Cleanup
 
 ;;;###tramp-autoload
 (defvar tramp-cleanup-connection-hook nil
@@ -123,7 +129,7 @@ When called interactively, a Tramp connection has to be selected."
     ;; Delete processes.
     (dolist (key (hash-table-keys tramp-cache-data))
       (when (and (processp key)
-		 (tramp-file-name-equal-p (process-get key 'vector) vec)
+		 (tramp-file-name-equal-p (process-get key 'tramp-vector) vec)
 		 (or (not keep-processes)
 		     (eq key (tramp-get-process vec))))
 	(tramp-flush-connection-properties key)
@@ -207,17 +213,86 @@ This includes password cache, file cache, connection cache, buffers."
   ;; The end.
   (run-hooks 'tramp-cleanup-all-connections-hook))
 
+(defcustom tramp-cleanup-some-buffers-hook nil
+  "Hook for `tramp-cleanup-some-buffers'.
+The functions determine which buffers shall be killed.  This
+happens when at least one of the functions returns non-nil.  The
+functions are called with `current-buffer' set."
+  :group 'tramp
+  :version "30.1"
+  :type 'hook)
+
+(add-hook 'tramp-cleanup-some-buffers-hook
+	  #'buffer-file-name)
+
+(defun tramp-dired-buffer-p ()
+  "Return t if current buffer runs `dired-mode'."
+  (declare (tramp-suppress-trace t))
+  (derived-mode-p 'dired-mode))
+
+(add-hook 'tramp-cleanup-some-buffers-hook
+	  #'tramp-dired-buffer-p)
+
+(defvar tramp-tainted-remote-process-buffers nil
+  "List of process buffers to be cleaned up.")
+
+(defun tramp-delete-tainted-remote-process-buffer-function ()
+  "Delete current buffer from `tramp-tainted-remote-process-buffers'."
+  (declare (tramp-suppress-trace t))
+  (setq tramp-tainted-remote-process-buffers
+	(delete (current-buffer) tramp-tainted-remote-process-buffers)))
+
 ;;;###tramp-autoload
-(defun tramp-cleanup-all-buffers ()
-  "Kill all remote buffers."
+(defun tramp-taint-remote-process-buffer (buffer)
+  "Mark buffer as related to remote processes."
+  ;; (declare (tramp-suppress-trace t))
+  (add-to-list 'tramp-tainted-remote-process-buffers buffer))
+
+;; We cannot use the `declare' form for `tramp-suppress-trace' in
+;; autoloaded functions, because the tramp-loaddefs.el generation
+;; would fail.
+(function-put #'tramp-taint-remote-process-buffer 'tramp-suppress-trace t)
+
+(add-hook 'kill-buffer-hook
+	  #'tramp-delete-tainted-remote-process-buffer-function)
+(add-hook 'tramp-unload-hook
+	  (lambda ()
+	    (remove-hook 'kill-buffer-hook
+			 #'tramp-delete-tainted-remote-process-buffer-function)))
+
+(defun tramp-remote-process-p ()
+  "Return t if current buffer belongs to a remote process."
+  (memq (current-buffer) tramp-tainted-remote-process-buffers))
+
+(add-hook 'tramp-cleanup-some-buffers-hook
+	  #'tramp-remote-process-p)
+
+;;;###tramp-autoload
+(defun tramp-cleanup-some-buffers ()
+  "Kill some remote buffers.
+A buffer is killed when it has a remote `default-directory', and
+one of the functions in `tramp-cleanup-some-buffers-hook' returns
+non-nil."
   (interactive)
 
   ;; Remove all Tramp related connections.
   (tramp-cleanup-all-connections)
 
-  ;; Remove all buffers with a remote default-directory.
+  ;; Remove all buffers with a remote default-directory which fit the hook.
   (dolist (name (tramp-list-remote-buffers))
-    (when (bufferp (get-buffer name)) (kill-buffer name))))
+    (and (buffer-live-p (get-buffer name))
+	 (with-current-buffer (get-buffer name)
+	   (run-hook-with-args-until-success 'tramp-cleanup-some-buffers-hook))
+	 (kill-buffer name))))
+
+;;;###tramp-autoload
+(defun tramp-cleanup-all-buffers ()
+  "Kill all remote buffers."
+  (interactive)
+  (let ((tramp-cleanup-some-buffers-hook '(tramp-compat-always)))
+    (tramp-cleanup-some-buffers)))
+
+;;; Rename
 
 (defcustom tramp-default-rename-alist nil
   "Default target for renaming remote buffer file names.
@@ -319,7 +394,7 @@ The remote connection identified by SOURCE is flushed by
 	 (read-file-name-function #'read-file-name-default)
 	  source target)
      (if (null connections)
-	 (tramp-user-error nil "There are no remote connections.")
+	 (tramp-user-error nil "There are no remote connections")
        (setq source
 	     ;; Likely, the source remote connection is broken.  So we
 	     ;; shall avoid any action on it.
@@ -367,15 +442,15 @@ The remote connection identified by SOURCE is flushed by
      (list source target)))
 
   (unless (tramp-tramp-file-p source)
-    (tramp-user-error nil "Source %s must be remote." source))
+    (tramp-user-error nil "Source %s must be remote" source))
   (when (null target)
     (or (setq target (tramp-default-rename-file source))
 	(tramp-user-error
 	 nil
 	 (concat "There is no target specified.  "
-		 "Check `tramp-default-rename-alist' for a proper entry."))))
+		 "Check `tramp-default-rename-alist' for a proper entry"))))
   (when (tramp-equal-remote source target)
-    (tramp-user-error nil "Source and target must have different remote."))
+    (tramp-user-error nil "Source and target must have different remote"))
 
   ;; Append local file name if none is specified.
   (when (string-equal (file-remote-p target) target)
@@ -461,7 +536,7 @@ For details, see `tramp-rename-files'."
 	  nil
 	  (substitute-command-keys
 	   (concat "Current buffer is not remote.  "
-		   "Consider `\\[tramp-rename-files]' instead.")))
+		   "Consider `\\[tramp-rename-files]' instead")))
        (setq target
 	     (when (null current-prefix-arg)
 	       ;; The source remote connection shall not trigger any action.
@@ -482,6 +557,73 @@ For details, see `tramp-rename-files'."
 ;;;###tramp-autoload
 (function-put
  #'tramp-rename-these-files 'completion-predicate #'tramp-command-completion-p)
+
+;;; Run as sudo
+
+(defcustom tramp-file-name-with-method "sudo"
+  "Which method to be used in `tramp-file-name-with-sudo'."
+  :group 'tramp
+  :version "30.1"
+  :type '(choice (const "su")
+		 (const "sudo")
+		 (const "doas")
+		 (const "ksu")))
+
+(defun tramp-file-name-with-sudo (filename)
+  "Convert FILENAME into a multi-hop file name with \"sudo\".
+An alternative method could be chosen with `tramp-file-name-with-method'."
+  (setq filename (expand-file-name filename))
+  (if (tramp-tramp-file-p filename)
+      (with-parsed-tramp-file-name filename nil
+	(cond
+	 ;; Remote file with proper method.
+	 ((string-equal method tramp-file-name-with-method)
+	  filename)
+	 ;; Remote file on the local host.
+	 ((and
+	   (stringp tramp-local-host-regexp) (stringp host)
+	   (string-match-p tramp-local-host-regexp host))
+	  (tramp-make-tramp-file-name
+	   (make-tramp-file-name
+	    :method tramp-file-name-with-method :localname localname)))
+	 ;; Remote file with multi-hop capable method..
+	 ((tramp-multi-hop-p v)
+	  (tramp-make-tramp-file-name
+	   (make-tramp-file-name
+	    :method (tramp-find-method tramp-file-name-with-method nil host)
+	    :user (tramp-find-user tramp-file-name-with-method nil host)
+	    :host (tramp-find-host tramp-file-name-with-method nil host)
+	    :localname localname :hop (tramp-make-tramp-hop-name v))))
+	 ;; Other remote file.
+	 (t (tramp-user-error v "Multi-hop with `%s' not applicable" method))))
+    ;; Local file.
+    (tramp-make-tramp-file-name
+     (make-tramp-file-name
+      :method tramp-file-name-with-method :localname filename))))
+
+;;;###tramp-autoload
+(defun tramp-revert-buffer-with-sudo ()
+  "Revert current buffer to visit with \"sudo\" permissions.
+An alternative method could be chosen with `tramp-file-name-with-method'.
+If the buffer visits a file, the file is replaced.
+If the buffer runs `dired', the buffer is reverted."
+  (interactive)
+  (cond
+   ((buffer-file-name)
+    (find-alternate-file (tramp-file-name-with-sudo (buffer-file-name))))
+   ((tramp-dired-buffer-p)
+    (dired-unadvertise (expand-file-name default-directory))
+    (setq default-directory (tramp-file-name-with-sudo default-directory)
+	  list-buffers-directory
+	  (tramp-file-name-with-sudo list-buffers-directory))
+    (if (consp dired-directory)
+	(setcar
+	 dired-directory (tramp-file-name-with-sudo (car dired-directory)))
+      (setq dired-directory (tramp-file-name-with-sudo dired-directory)))
+    (dired-advertise)
+    (revert-buffer))))
+
+;;; Recompile on ELPA
 
 ;; This function takes action since Emacs 28.1, when
 ;; `read-extended-command-predicate' is set to
@@ -679,7 +821,7 @@ buffer in your bug report.
 
   ;; Beautify encoded values.
   (goto-char (point-min))
-  (while (re-search-forward
+  (while (search-forward-regexp
 	  (rx "'" (group "(decode-coding-string")) nil 'noerror)
     (replace-match "\\1"))
   (goto-char (point-max))
@@ -707,7 +849,7 @@ buffer in your bug report.
 	(setq buffer-read-only nil)
 	(goto-char (point-min))
 	(while (not (eobp))
-	  (if (re-search-forward tramp-buf-regexp (line-end-position) t)
+	  (if (search-forward-regexp tramp-buf-regexp (line-end-position) t)
 	      (forward-line 1)
 	    (forward-line 0)
 	    (let ((start (point)))

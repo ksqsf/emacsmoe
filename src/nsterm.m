@@ -1,6 +1,6 @@
 /* NeXT/Open/GNUstep / macOS communication module.      -*- coding: utf-8 -*-
 
-Copyright (C) 1989, 1993-1994, 2005-2006, 2008-2023 Free Software
+Copyright (C) 1989, 1993-1994, 2005-2006, 2008-2024 Free Software
 Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -550,33 +550,45 @@ ns_relocate (const char *epath)
 
 
 void
+ns_init_pool (void)
+/* Initialize the 'outerpool' autorelease pool.  This should be called
+   from main before any Objective C code is run.  */
+{
+  outerpool = [[NSAutoreleasePool alloc] init];
+}
+
+
+void
 ns_init_locale (void)
 /* macOS doesn't set any environment variables for the locale when run
    from the GUI. Get the locale from the OS and set LANG.  */
 {
-  NSLocale *locale = [NSLocale currentLocale];
-
   NSTRACE ("ns_init_locale");
 
-  /* If we were run from a terminal then assume an unset LANG variable
-     is intentional and don't try to "fix" it.  */
-  if (!isatty (STDIN_FILENO))
+  /* Either use LANG, if set, or try to construct LANG from
+     NSLocale.  */
+  const char *lang = getenv ("LANG");
+  if (lang == NULL || *lang == 0)
     {
-      char *oldLocale = setlocale (LC_ALL, NULL);
-      /* It seems macOS should probably use UTF-8 everywhere.
-         'localeIdentifier' does not specify the encoding, and I can't
-         find any way to get the OS to tell us which encoding to use,
-         so hard-code '.UTF-8'.  */
-      NSString *localeID = [NSString stringWithFormat:@"%@.UTF-8",
-                                     [locale localeIdentifier]];
-
-      /* Check the locale ID is valid and if so set LANG, but not if
-         it is already set.  */
-      if (setlocale (LC_ALL, [localeID UTF8String]))
-        setenv("LANG", [localeID UTF8String], 0);
-
-      setlocale (LC_ALL, oldLocale);
+      const NSLocale *locale = [NSLocale currentLocale];
+      const NSString *localeID = [NSString stringWithFormat:@"%@.UTF-8",
+					   [locale localeIdentifier]];
+      lang = [localeID UTF8String];
     }
+
+  /* Check if LANG can be used for initializing the locale.  If not,
+     use a default setting.  Note that Emacs' main will undo the
+     setlocale below, initializing the locale from the
+     environment.  */
+  if (setlocale (LC_ALL, lang) == NULL)
+    {
+      const char *const default_lang = "en_US.UTF-8";
+      fprintf (stderr, "LANG=%s cannot be used, using %s instead.\n",
+	       lang, default_lang);
+      lang = default_lang;
+    }
+
+  setenv ("LANG", lang, 1);
 }
 
 
@@ -1624,7 +1636,7 @@ ns_free_frame_resources (struct frame *f)
     [f->output_data.ns->miniimage release];
 
   [[view window] close];
-  [view release];
+  [view removeFromSuperview];
 
   xfree (f->output_data.ns);
   f->output_data.ns = NULL;
@@ -2707,7 +2719,7 @@ ns_scroll_run (struct window *w, struct run *run)
     EmacsView *view = FRAME_NS_VIEW (f);
 
     [view copyRect:srcRect to:dest];
-#ifdef NS_IMPL_COCOA
+#if defined (NS_IMPL_COCOA) && MAC_OS_X_VERSION_MAX_ALLOWED < 101400
     [view setNeedsDisplayInRect:srcRect];
 #endif
   }
@@ -2727,6 +2739,7 @@ ns_clear_under_internal_border (struct frame *f)
       int width = FRAME_PIXEL_WIDTH (f);
       int height = FRAME_PIXEL_HEIGHT (f);
       int margin = FRAME_TOP_MARGIN_HEIGHT (f);
+      int bottom_margin = FRAME_BOTTOM_MARGIN_HEIGHT (f);
       int face_id =
         (FRAME_PARENT_FRAME (f)
          ? (!NILP (Vface_remapping_alist)
@@ -2752,7 +2765,8 @@ ns_clear_under_internal_border (struct frame *f)
       NSRectFill (NSMakeRect (0, 0, border, height));
       NSRectFill (NSMakeRect (0, margin, width, border));
       NSRectFill (NSMakeRect (width - border, 0, border, height));
-      NSRectFill (NSMakeRect (0, height - border, width, border));
+      NSRectFill (NSMakeRect (0, height - bottom_margin - border,
+			      width, border));
       ns_unfocus (f);
     }
 }
@@ -3750,14 +3764,18 @@ ns_maybe_dumpglyphs_background (struct glyph_string *s, char force_p)
 	{
           struct face *face = s->face;
           if (!face->stipple)
-	    {
-	      if (s->hl != DRAW_CURSOR)
-		[(NS_FACE_BACKGROUND (face) != 0
-		  ? [NSColor colorWithUnsignedLong:NS_FACE_BACKGROUND (face)]
-		  : FRAME_BACKGROUND_COLOR (s->f)) set];
-	      else
-		[FRAME_CURSOR_COLOR (s->f) set];
-	    }
+            {
+              if (s->hl != DRAW_CURSOR)
+                [(NS_FACE_BACKGROUND (face) != 0
+                  ? [NSColor colorWithUnsignedLong:NS_FACE_BACKGROUND (face)]
+                  : FRAME_BACKGROUND_COLOR (s->f)) set];
+              else if (face && (NS_FACE_BACKGROUND (face)
+                                == [(NSColor *) FRAME_CURSOR_COLOR (s->f)
+                                                unsignedLong]))
+                [[NSColor colorWithUnsignedLong:NS_FACE_FOREGROUND (face)] set];
+              else
+                [FRAME_CURSOR_COLOR (s->f) set];
+            }
           else
             {
               struct ns_display_info *dpyinfo = FRAME_DISPLAY_INFO (s->f);
@@ -4554,21 +4572,6 @@ ns_send_appdefined (int value)
   /* Only post this event if we haven't already posted one.  This will end
      the [NXApp run] main loop after having processed all events queued at
      this moment.  */
-
-#ifdef NS_IMPL_COCOA
-  if (! send_appdefined)
-    {
-      /* OS X 10.10.1 swallows the AppDefined event we are sending ourselves
-         in certain situations (rapid incoming events).
-         So check if we have one, if not add one.  */
-      NSEvent *appev = [NSApp nextEventMatchingMask:NSEventMaskApplicationDefined
-                                          untilDate:[NSDate distantPast]
-                                             inMode:NSDefaultRunLoopMode
-                                            dequeue:NO];
-      if (! appev) send_appdefined = YES;
-    }
-#endif
-
   if (send_appdefined)
     {
       NSEvent *nxev;
@@ -4603,7 +4606,7 @@ ns_send_appdefined (int value)
 
 #if defined (NS_IMPL_COCOA) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
 static void
-check_native_fs ()
+check_native_fs (void)
 {
   Lisp_Object frame, tail;
 
@@ -6119,6 +6122,11 @@ ns_term_shutdown (int sig)
 
 */
 
+- (BOOL) applicationSupportsSecureRestorableState: (NSApplication *)app
+{
+  return YES;
+}
+
 - (void) terminate: (id)sender
 {
   struct input_event ie;
@@ -7059,13 +7067,9 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
 static Lisp_Object
 ns_in_echo_area_1 (void *ptr)
 {
-  Lisp_Object in_echo_area;
-  specpdl_ref count;
-
-  count = SPECPDL_INDEX ();
+  const specpdl_ref count = SPECPDL_INDEX ();
   specbind (Qinhibit_quit, Qt);
-  in_echo_area = safe_call (1, Qns_in_echo_area);
-
+  const Lisp_Object in_echo_area = safe_calln (Qns_in_echo_area);
   return unbind_to (count, in_echo_area);
 }
 
@@ -7413,7 +7417,7 @@ ns_in_echo_area (void)
 	  int x = lrint (p.x);
 	  int y = lrint (p.y);
 
-	  window = window_from_coordinates (emacsframe, x, y, 0, true, true);
+	  window = window_from_coordinates (emacsframe, x, y, 0, true, true, true);
 	  tab_bar_p = EQ (window, emacsframe->tab_bar_window);
 
 	  if (tab_bar_p)
@@ -7519,7 +7523,7 @@ ns_in_echo_area (void)
       NSTRACE_MSG ("mouse_autoselect_window");
       static Lisp_Object last_mouse_window;
       Lisp_Object window
-	= window_from_coordinates (emacsframe, pt.x, pt.y, 0, 0, 0);
+	= window_from_coordinates (emacsframe, pt.x, pt.y, 0, 0, 0, 0);
 
       if (WINDOWP (window)
           && !EQ (window, last_mouse_window)
@@ -7915,8 +7919,6 @@ ns_in_echo_area (void)
   maximizing_resize = NO;
 #endif
 
-  [[EmacsWindow alloc] initWithEmacsFrame:f];
-
 #if defined (NS_IMPL_COCOA) && MAC_OS_X_VERSION_MIN_REQUIRED >= 101400
   /* These settings mean AppKit will retain the contents of the frame
      on resize.  Unfortunately it also means the frame will not be
@@ -7926,6 +7928,17 @@ ns_in_echo_area (void)
   [self setLayerContentsRedrawPolicy:
           NSViewLayerContentsRedrawOnSetNeedsDisplay];
   [self setLayerContentsPlacement:NSViewLayerContentsPlacementTopLeft];
+
+  [[EmacsWindow alloc] initWithEmacsFrame:f];
+
+  /* Now the NSWindow has been created, we can finish up configuring
+     the layer.  */
+  [(EmacsLayer *)[self layer] setColorSpace:
+                   [[[self window] colorSpace] CGColorSpace]];
+  [(EmacsLayer *)[self layer] setContentsScale:
+                   [[self window] backingScaleFactor]];
+#else
+  [[EmacsWindow alloc] initWithEmacsFrame:f];
 #endif
 
   if (ns_drag_types)
@@ -8573,6 +8586,10 @@ ns_in_echo_area (void)
   return self;
 }
 
+- (BOOL) validateToolbarItem: (NSToolbarItem *) toolbarItem
+{
+  return [toolbarItem isEnabled];
+}
 
 - (instancetype)toggleToolbar: (id)sender
 {
@@ -8592,9 +8609,9 @@ ns_in_echo_area (void)
 - (CALayer *)makeBackingLayer
 {
   EmacsLayer *l = [[EmacsLayer alloc]
-                    initWithColorSpace:[[[self window] colorSpace] CGColorSpace]];
+                    initWithDoubleBuffered:FRAME_DOUBLE_BUFFERED (emacsframe)];
+
   [l setDelegate:(id)self];
-  [l setContentsScale:[[self window] backingScaleFactor]];
 
   return l;
 }
@@ -8649,8 +8666,10 @@ ns_in_echo_area (void)
                                NSHeight (srcRect));
 
 #if defined (NS_IMPL_COCOA) && MAC_OS_X_VERSION_MIN_REQUIRED >= 101400
-  double scale = [[self window] backingScaleFactor];
   CGContextRef context = [(EmacsLayer *)[self layer] getContext];
+  CGContextFlush (context);
+
+  double scale = [[self window] backingScaleFactor];
   int bpp = CGBitmapContextGetBitsPerPixel (context) / 8;
   void *pixels = CGBitmapContextGetData (context);
   int rowSize = CGBitmapContextGetBytesPerRow (context);
@@ -8815,8 +8834,8 @@ ns_in_echo_area (void)
      so call this function instead.  */
   XSETFRAME (frame, emacsframe);
 
-  safe_call (4, Vns_drag_motion_function, frame,
-	     make_fixnum (x), make_fixnum (y));
+  safe_calln (Vns_drag_motion_function, frame,
+	      make_fixnum (x), make_fixnum (y));
 
   redisplay ();
 #endif
@@ -9166,10 +9185,17 @@ ns_in_echo_area (void)
 
 - (void)createToolbar: (struct frame *)f
 {
-  if (FRAME_UNDECORATED (f) || !FRAME_EXTERNAL_TOOL_BAR (f))
+  if (FRAME_UNDECORATED (f) || !FRAME_EXTERNAL_TOOL_BAR (f) || [self toolbar] != nil)
     return;
 
   EmacsView *view = (EmacsView *)FRAME_NS_VIEW (f);
+
+#if defined (NS_IMPL_COCOA) && MAC_OS_X_VERSION_MIN_REQUIRED >= 101400
+  /* If the view's layer isn't an EmacsLayer then we can't create the
+     toolbar yet.  */
+  if (! [[view layer] isKindOfClass:[EmacsLayer class]])
+    return;
+#endif
 
   EmacsToolbar *toolbar = [[EmacsToolbar alloc]
                             initForView:view
@@ -10413,22 +10439,19 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
    cache.  If no free surfaces are found in the cache then a new one
    is created.  */
 
-#define CACHE_MAX_SIZE 2
-
-- (id) initWithColorSpace: (CGColorSpaceRef)cs
+- (id) initWithDoubleBuffered: (bool)db
 {
-  NSTRACE ("[EmacsLayer initWithColorSpace:]");
+  NSTRACE ("[EmacsLayer initWithDoubleBuffered:]");
 
   self = [super init];
   if (self)
     {
-      cache = [[NSMutableArray arrayWithCapacity:CACHE_MAX_SIZE] retain];
-      [self setColorSpace:cs];
+      [self setColorSpace:nil];
+      [self setDoubleBuffered:db];
+      cache = [[NSMutableArray arrayWithCapacity:(doubleBuffered ? 2 : 1)] retain];
     }
   else
-    {
-      return nil;
-    }
+    return nil;
 
   return self;
 }
@@ -10442,6 +10465,15 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
     colorSpace = cs;
   else
     colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB);
+}
+
+
+- (void) setDoubleBuffered: (bool)db
+{
+  if (doubleBuffered != db)
+    [self releaseSurfaces];
+
+  doubleBuffered = db;
 }
 
 
@@ -10516,7 +10548,7 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
             }
         }
 
-      if (!surface && [cache count] >= CACHE_MAX_SIZE)
+      if (!surface && [cache count] >= (doubleBuffered ? 2 : 1))
         {
           /* Just grab the first one off the cache.  This may result
              in tearing effects.  The alternative is to wait for one
@@ -10569,7 +10601,7 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
           return nil;
         }
 
-      CGContextTranslateCTM(context, 0, IOSurfaceGetHeight (currentSurface));
+      CGContextTranslateCTM(context, 0, IOSurfaceGetHeight (surface));
       CGContextScaleCTM(context, scale, -scale);
     }
 
@@ -10586,6 +10618,7 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
   if (!context)
     return;
 
+  CGContextFlush (context);
   CGContextRelease (context);
   context = NULL;
 
@@ -10599,26 +10632,18 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
 {
   NSTRACE_WHEN (NSTRACE_GROUP_FOCUS, "[EmacsLayer display]");
 
-  if (context)
+  if (context && context != [[NSGraphicsContext currentContext] CGContext])
     {
       [self releaseContext];
 
-#if CACHE_MAX_SIZE == 1
-      /* This forces the layer to see the surface as updated.  */
+      /* This forces the layer to see the surface as updated even if
+         we replace it with itself.  */
       [self setContents:nil];
-#endif
-
       [self setContents:(id)currentSurface];
 
       /* Put currentSurface back on the end of the cache.  */
       [cache addObject:(id)currentSurface];
       currentSurface = NULL;
-
-      /* Schedule a run of getContext so that if Emacs is idle it will
-         perform the buffer copy, etc.  */
-      [self performSelectorOnMainThread:@selector (getContext)
-                             withObject:nil
-                          waitUntilDone:NO];
     }
 }
 

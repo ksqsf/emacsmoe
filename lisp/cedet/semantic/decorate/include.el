@@ -1,6 +1,6 @@
 ;;; semantic/decorate/include.el --- Decoration modes for include statements  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2008-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2024 Free Software Foundation, Inc.
 
 ;; Author: Eric M. Ludlam <zappo@gnu.org>
 
@@ -48,7 +48,7 @@
 ;;; Includes that are in a happy state!
 ;;
 (defface semantic-decoration-on-includes
-  nil
+  '((t (:inherit default)))
   "Overlay Face used on includes that are not in some other state.
 Used by the decoration style: `semantic-decoration-on-includes'."
   :group 'semantic-faces)

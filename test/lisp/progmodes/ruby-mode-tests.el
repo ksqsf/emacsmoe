@@ -1,6 +1,6 @@
 ;;; ruby-mode-tests.el --- Test suite for ruby-mode  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2012-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -156,6 +156,18 @@ VALUES-PLIST is a list with alternating index and value elements."
 
 (ert-deftest ruby-regexp-is-not-mistaken-for-slash-symbol ()
   (ruby-assert-state "x = /foo:/" 3 nil))
+
+(ert-deftest ruby-slash-not-regexp-when-surrounded-by-spaces ()
+  (ruby-assert-state "x = index / 3" 3 nil))
+
+(ert-deftest ruby-slash-not-regexp-when-no-spaces ()
+  (ruby-assert-state "x = index/3" 3 nil))
+
+(ert-deftest ruby-regexp-not-division-when-only-space-before ()
+  (ruby-assert-state "x = foo_index /3" 3 ?/))
+
+(ert-deftest ruby-slash-not-regexp-when-only-space-after ()
+  (ruby-assert-state "x = index/ 3" 3 nil))
 
 (ert-deftest ruby-indent-simple ()
   (ruby-should-indent-buffer
@@ -566,6 +578,22 @@ VALUES-PLIST is a list with alternating index and value elements."
                           |end")
     (search-backward "_")
     (should (string= (ruby-add-log-current-method) "C::D#foo"))))
+
+(ert-deftest ruby-add-log-current-method-singleton-referencing-outer ()
+  (ruby-with-temp-buffer (ruby-test-string
+                          "module M
+                          |  module N
+                          |    module C
+                          |      class D
+                          |        def C.foo
+                          |          _
+                          |        end
+                          |      end
+                          |    end
+                          |  end
+                          |end")
+    (search-backward "_")
+    (should (string= (ruby-add-log-current-method) "M::N::C.foo"))))
 
 (ert-deftest ruby-add-log-current-method-after-inner-class ()
   (ruby-with-temp-buffer (ruby-test-string

@@ -20,8 +20,7 @@ This is the @cite{GNU Emacs Manual},
 @end ifclear
 updated for Emacs version @value{EMACSVER}.
 
-Copyright @copyright{} 1985--1987, 1993--2023 Free Software Foundation,
-Inc.
+Copyright @copyright{} 1985--2024 Free Software Foundation, Inc.
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document
@@ -150,6 +149,7 @@ Important General Concepts
                           editing action.
 * Mouse Input::         Using the mouse and keypads.
 * Commands::            Named functions run by key sequences to do editing.
+* Other Input::         Input besides the mouse, keyboard and keypads.
 * Entering Emacs::      Starting Emacs from the shell.
 * Exiting::             Stopping or killing Emacs.
 
@@ -223,6 +223,7 @@ Appendices
 * Antinews::            Information about Emacs version 28.
 * Mac OS / GNUstep::     Using Emacs under macOS and GNUstep.
 * Haiku::               Using Emacs on Haiku.
+* Android::             Using Emacs on Android.
 * Microsoft Windows::   Using Emacs on Microsoft Windows and MS-DOS.
 * Manifesto::           What's GNU?  Gnu's Not Unix!
 
@@ -256,6 +257,10 @@ The Organization of the Screen
 * Echo Area::           Short messages appear at the bottom of the screen.
 * Mode Line::           Interpreting the mode line.
 * Menu Bar::            How to use the menu bar.
+
+Touchscreen Input and Virtual Keyboards
+* Touchscreens::        Interacting with Emacs from touchscreens.
+* On-Screen Keyboards:: Text input with virtual keyboards.
 
 Basic Editing Commands
 
@@ -349,7 +354,7 @@ Registers
 * Position Registers::        Saving positions in registers.
 * Text Registers::            Saving text in registers.
 * Rectangle Registers::       Saving rectangles in registers.
-* Configuration Registers::   Saving window configurations in registers.
+* Configuration Registers::   Saving window/frame configurations in registers.
 * Number Registers::          Numbers in registers.
 * File and Buffer Registers:: File and buffer names in registers.
 * Keyboard Macro Registers::  Keyboard macros in registers.
@@ -551,7 +556,7 @@ Frames and Graphical Displays
 * Dialog Boxes::        Controlling use of dialog boxes.
 * Tooltips::            Displaying information at the current mouse position.
 * Mouse Avoidance::     Preventing the mouse pointer from obscuring text.
-* Non-Window Terminals::  Multiple frames on terminals that show only one.
+* Text Terminals::      Multiple frames on terminals that show only one.
 * Text-Only Mouse::     Using the mouse in text terminals.
 
 International Character Set Support
@@ -593,6 +598,7 @@ Indentation
 * Tab Stops::             Stop points for indentation in Text modes.
 * Just Spaces::           Using only space characters for indentation.
 * Indent Convenience::    Optional indentation features.
+* Code Alignment::        Making common parts of lines start at the same column.
 
 Commands for Human Languages
 
@@ -1260,6 +1266,18 @@ Emacs and Haiku
 * Haiku Basics::        Basic Emacs usage and installation under Haiku.
 * Haiku Fonts::         The various options for displaying fonts on Haiku.
 
+Emacs and Android
+
+* What is Android?::            Preamble.
+* Android Startup::             Starting up Emacs on Android.
+* Android File System::         The Android file system.
+* Android Document Providers::  Accessing files from other programs.
+* Android Environment::         Running Emacs under Android.
+* Android Windowing::           The Android window system.
+* Android Fonts::               Font selection under Android.
+* Android Troubleshooting::     Dealing with problems.
+* Android Software::            Getting extra software.
+
 Emacs and Microsoft Windows/MS-DOS
 
 * Windows Startup::     How to start Emacs on Windows.
@@ -1630,6 +1648,7 @@ Lisp programming.
 @include anti.texi
 @include macos.texi
 @include haiku.texi
+@include android.texi
 @c Includes msdos-xtra.
 @include msdos.texi
 @include gnu.texi

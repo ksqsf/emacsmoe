@@ -1,6 +1,6 @@
 ;;; tex-mode.el --- TeX, LaTeX, and SliTeX mode commands  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1989, 1992, 1994-1999, 2001-2023 Free
+;; Copyright (C) 1985-1986, 1989, 1992, 1994-1999, 2001-2024 Free
 ;; Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -32,9 +32,6 @@
   (require 'compare-w)
   (require 'cl-lib)
   (require 'skeleton))
-
-(defvar font-lock-comment-face)
-(defvar font-lock-doc-face)
 
 (require 'shell)
 (require 'compile)
@@ -517,14 +514,19 @@ An alternative value is \" . \", if you use a font with a narrow period."
            (inbraces-re (lambda (re)
                           (concat "\\(?:[^{}\\]\\|\\\\.\\|" re "\\)")))
 	   (arg (concat "{\\(" (funcall inbraces-re "{[^}]*}") "+\\)")))
-      `( ;; Highlight $$math$$ and $math$.
+      `(;; Verbatim-like args.
+        ;; Do it first, because we don't want to highlight them
+        ;; in comments (bug#68827), but we do want to highlight them
+        ;; in $math$.
+        (,(concat slash verbish opt arg) 3 'tex-verbatim keep)
+        ;; Highlight $$math$$ and $math$.
         ;; This is done at the very beginning so as to interact with the other
         ;; keywords in the same way as comments and strings.
         (,(concat "\\$\\$?\\(?:[^$\\{}]\\|\\\\.\\|{"
                   (funcall inbraces-re
                            (concat "{" (funcall inbraces-re "{[^}]*}") "*}"))
                   "*}\\)+\\$?\\$")
-         (0 'tex-math))
+         (0 'tex-math keep))
         ;; Heading args.
         (,(concat slash headings "\\*?" opt arg)
          ;; If ARG ends up matching too much (if the {} don't match, e.g.)
@@ -546,8 +548,6 @@ An alternative value is \" . \", if you use a font with a narrow period."
         (,(concat slash variables " *" arg) 2 font-lock-variable-name-face)
         ;; Include args.
         (,(concat slash includes opt arg) 3 font-lock-builtin-face)
-        ;; Verbatim-like args.
-        (,(concat slash verbish opt arg) 3 'tex-verbatim t)
         ;; Definitions.  I think.
         ("^[ \t]*\\\\def *\\\\\\(\\(\\w\\|@\\)+\\)"
 	 1 font-lock-function-name-face))))
@@ -2025,7 +2025,7 @@ In the tex shell buffer this command behaves like `comint-send-input'."
 
 (defun tex-display-shell ()
   "Make the TeX shell buffer visible in a window."
-  (display-buffer (tex-shell-buf) display-comint-buffer-action)
+  (display-buffer (tex-shell-buf) display-tex-shell-buffer-action)
   (tex-recenter-output-buffer nil))
 
 (defun tex-shell-sentinel (proc _msg)
@@ -2137,6 +2137,7 @@ If NOT-ALL is non-nil, save the `.dvi' file."
                   t "%r.pdf"))
               '("pdf" "xe" "lua"))
     ((concat tex-command
+             " " tex-start-options
 	     " " (if (< 0 (length tex-start-commands))
 		     (shell-quote-argument tex-start-commands))
              " %f")
@@ -2426,7 +2427,7 @@ Only applies the FSPEC to the args part of FORMAT."
 	(if cmds (tex-format-cmd (caar cmds) fspec))))))
 
 (defun tex-cmd-doc-view (file)
-  (pop-to-buffer (find-file-noselect file) display-comint-buffer-action))
+  (pop-to-buffer (find-file-noselect file)))
 
 (defun tex-compile (dir cmd)
   "Run a command CMD on current TeX buffer's file in DIR."
@@ -2677,17 +2678,17 @@ This function is more useful than \\[tex-buffer] when you need the
 The last line of the buffer is displayed on
 line LINE of the window, or centered if LINE is nil."
   (interactive "P")
-  (let ((tex-shell (get-buffer "*tex-shell*"))
-	(window))
+  (let ((tex-shell (get-buffer "*tex-shell*")))
     (if (null tex-shell)
 	(message "No TeX output buffer")
-      (setq window (display-buffer tex-shell display-comint-buffer-action))
-      (with-selected-window window
-	(bury-buffer tex-shell)
-	(goto-char (point-max))
-	(recenter (if linenum
-		      (prefix-numeric-value linenum)
-		    (/ (window-height) 2)))))))
+      (when-let ((window
+                  (display-buffer tex-shell display-tex-shell-buffer-action)))
+        (with-selected-window window
+	  (bury-buffer tex-shell)
+	  (goto-char (point-max))
+	  (recenter (if linenum
+		        (prefix-numeric-value linenum)
+		      (/ (window-height) 2))))))))
 
 (defcustom tex-print-file-extension ".dvi"
   "The TeX-compiled file extension for viewing and printing.

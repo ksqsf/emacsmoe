@@ -1,6 +1,6 @@
 ;;; reftex-cite.el --- creating citations with RefTeX  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2024 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <dominik@science.uva.nl>
 ;; Maintainer: auctex-devel@gnu.org
@@ -566,7 +566,7 @@ If FORMAT is non-nil `format' entry accordingly."
           (reftex-get-bib-field "booktitle" entry "in: %s"))
          (t ""))))
     (setq authors (reftex-truncate authors 30 t t))
-    (when (reftex-use-fonts)
+    (when reftex-use-fonts
       (put-text-property 0 (length key)     'face reftex-label-face
                          key)
       (put-text-property 0 (length authors) 'face reftex-bib-author-face
@@ -609,7 +609,7 @@ If FORMAT is non-nil `format' entry accordingly."
     (push text lines)
     (setq text (mapconcat #'identity (nreverse lines) "\n     "))
 
-    (when (reftex-use-fonts)
+    (when reftex-use-fonts
       (put-text-property 0 (length text) 'face reftex-bib-author-face text))
     (concat key "\n     " text "\n\n")))
 

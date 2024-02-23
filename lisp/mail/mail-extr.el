@@ -1,6 +1,6 @@
 ;;; mail-extr.el --- extract full name and address from email header  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1991-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1991-2024 Free Software Foundation, Inc.
 
 ;; Author: Joe Wells <jbw@cs.bu.edu>
 ;; Maintainer: emacs-devel@gnu.org
@@ -1845,7 +1845,7 @@ place.  It affects how `mail-extract-address-components' works."
 ;; https://en.wikipedia.org/wiki/List_of_Internet_top-level_domains
 
 (defconst mail-extr-all-top-level-domains
-  (let ((ob (make-vector 739 0)))
+  (let ((ob (obarray-make 739)))
     (mapc
      (lambda (x)
        (put (intern (downcase (car x)) ob)

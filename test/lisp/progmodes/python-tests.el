@@ -1,6 +1,6 @@
 ;;; python-tests.el --- Test suite for python.el  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2013-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -136,20 +136,6 @@ STRING, it is skipped so the next STRING occurrence is selected."
            while pos
            collect (cons pos (get-text-property pos 'face))))
 
-(defun python-tests-assert-faces-after-change (content faces search replace)
-  "Assert that font faces for CONTENT are equal to FACES after change.
-All occurrences of SEARCH are changed to REPLACE."
-  (python-tests-with-temp-buffer
-   content
-   ;; Force enable font-lock mode without jit-lock.
-   (rename-buffer "*python-font-lock-test*" t)
-   (let (noninteractive font-lock-support-mode)
-     (font-lock-mode))
-   (while
-       (re-search-forward search nil t)
-     (replace-match replace))
-   (should (equal faces (python-tests-get-buffer-faces)))))
-
 (defun python-tests-self-insert (char-or-str)
   "Call `self-insert-command' for chars in CHAR-OR-STR."
   (let ((chars
@@ -255,6 +241,27 @@ aliqua."
 
 ;;; Font-lock and syntax
 
+(ert-deftest python-syntax-context-1 ()
+  (python-tests-with-temp-buffer
+   "
+# Comment
+s = 'Single Quoted String'
+t = '''Triple Quoted String'''
+p = (1 + 2)
+"
+   (python-tests-look-at "Comment")
+   (should (= (python-syntax-context 'comment) (pos-bol)))
+   (python-tests-look-at "Single")
+   (should (= (python-syntax-context 'string) (1- (point))))
+   (should (= (python-syntax-context 'single-quoted-string) (1- (point))))
+   (should-not (python-syntax-context 'triple-quoted-string))
+   (python-tests-look-at "Triple")
+   (should (= (python-syntax-context 'string) (1- (point))))
+   (should-not (python-syntax-context 'single-quoted-string))
+   (should (= (python-syntax-context 'triple-quoted-string) (1- (point))))
+   (python-tests-look-at "1 + 2")
+   (should (= (python-syntax-context 'paren) (1- (point))))))
+
 (ert-deftest python-syntax-after-python-backspace ()
   ;; `python-indent-dedent-line-backspace' garbles syntax
   (python-tests-with-temp-buffer
@@ -275,13 +282,6 @@ aliqua."
   (python-tests-assert-faces
    "def 1func():"
    '((1 . font-lock-keyword-face) (4))))
-
-(ert-deftest python-font-lock-keywords-level-1-3 ()
-  (python-tests-assert-faces
-   "def \\
-        func():"
-   '((1 . font-lock-keyword-face) (4)
-     (15 . font-lock-function-name-face) (19))))
 
 (ert-deftest python-font-lock-assignment-statement-1 ()
   (python-tests-assert-faces
@@ -474,107 +474,6 @@ def f(x: CustomInt) -> CustomInt:
      (136 . font-lock-operator-face) (137)
      (144 . font-lock-keyword-face) (150))))
 
-(ert-deftest python-font-lock-assignment-statement-multiline-1 ()
-  (python-tests-assert-faces-after-change
-   "
-[
-    a,
-    b
-] # (
-    1,
-    2
-)
-"
-   '((1)
-     (8 . font-lock-variable-name-face) (9)
-     (15 . font-lock-variable-name-face) (16)
-     (19 . font-lock-operator-face) (20))
-   "#" "="))
-
-(ert-deftest python-font-lock-assignment-statement-multiline-2 ()
-  (python-tests-assert-faces-after-change
-   "
-[
-    *a
-] # 5, 6
-"
-   '((1)
-     (8 . font-lock-operator-face)
-     (9 . font-lock-variable-name-face) (10)
-     (13 . font-lock-operator-face) (14))
-   "#" "="))
-
-(ert-deftest python-font-lock-assignment-statement-multiline-3 ()
-  (python-tests-assert-faces-after-change
-   "a\\
-    ,\\
-    b\\
-    ,\\
-    c\\
-    #\\
-    1\\
-    ,\\
-    2\\
-    ,\\
-    3"
-   '((1 . font-lock-variable-name-face) (2)
-     (15 . font-lock-variable-name-face) (16)
-     (29 . font-lock-variable-name-face) (30)
-     (36 . font-lock-operator-face) (37))
-   "#" "="))
-
-(ert-deftest python-font-lock-assignment-statement-multiline-4 ()
-  (python-tests-assert-faces-after-change
-   "a\\
-    :\\
-    int\\
-    #\\
-    5"
-   '((1 . font-lock-variable-name-face) (2)
-     (15 . font-lock-builtin-face) (18)
-     (24 . font-lock-operator-face) (25))
-   "#" "="))
-
-(ert-deftest python-font-lock-assignment-statement-multiline-5 ()
-  (python-tests-assert-faces-after-change
-   "(\\
-    a\\
-)\\
-    #\\
-    5\\
-    ;\\
-    (\\
-    b\\
-    )\\
-    #\\
-    6"
-   '((1)
-     (8 . font-lock-variable-name-face) (9)
-     (18 . font-lock-operator-face) (19)
-     (46 . font-lock-variable-name-face) (47)
-     (60 . font-lock-operator-face) (61))
-   "#" "="))
-
-(ert-deftest python-font-lock-assignment-statement-multiline-6 ()
-  (python-tests-assert-faces-after-change
-   "(
-    a
-)\\
-    #\\
-    5\\
-    ;\\
-    (
-    b
-    )\\
-    #\\
-    6"
-   '((1)
-     (7 . font-lock-variable-name-face) (8)
-     (16 . font-lock-operator-face) (17)
-     (43 . font-lock-variable-name-face) (44)
-     (56 . font-lock-operator-face) (57))
-   "#" "="))
-
 (ert-deftest python-font-lock-operator-1 ()
   (python-tests-assert-faces
    "1 << 2 ** 3 == +4%-5|~6&7^8%9"
@@ -712,54 +611,66 @@ u\"\\n\""
    "b'\\n'
 b\"\\n\""
    '((1)
-     (2 . font-lock-doc-face)
+     (2 . font-lock-string-face)
      (3 . font-lock-constant-face)
-     (5 . font-lock-doc-face) (6)
-     (8 . font-lock-doc-face)
+     (5 . font-lock-string-face) (6)
+     (8 . font-lock-string-face)
      (9 . font-lock-constant-face)
-     (11 . font-lock-doc-face))))
+     (11 . font-lock-string-face))))
 
 (ert-deftest python-font-lock-escape-sequence-hex-octal ()
   (python-tests-assert-faces
    "b'\\x12 \\777 \\1\\23'
 '\\x12 \\777 \\1\\23'"
    '((1)
-     (2 . font-lock-doc-face)
+     (2 . font-lock-string-face)
      (3 . font-lock-constant-face)
-     (7 . font-lock-doc-face)
+     (7 . font-lock-string-face)
      (8 . font-lock-constant-face)
-     (12 . font-lock-doc-face)
+     (12 . font-lock-string-face)
      (13 . font-lock-constant-face)
-     (18 . font-lock-doc-face) (19)
-     (20 . font-lock-doc-face)
+     (18 . font-lock-string-face) (19)
+     (20 . font-lock-string-face)
      (21 . font-lock-constant-face)
-     (25 . font-lock-doc-face)
+     (25 . font-lock-string-face)
      (26 . font-lock-constant-face)
-     (30 . font-lock-doc-face)
+     (30 . font-lock-string-face)
      (31 . font-lock-constant-face)
-     (36 . font-lock-doc-face))))
+     (36 . font-lock-string-face))))
 
 (ert-deftest python-font-lock-escape-sequence-unicode ()
   (python-tests-assert-faces
    "b'\\u1234 \\U00010348 \\N{Plus-Minus Sign}'
 '\\u1234 \\U00010348 \\N{Plus-Minus Sign}'"
    '((1)
-     (2 . font-lock-doc-face) (41)
-     (42 . font-lock-doc-face)
+     (2 . font-lock-string-face) (41)
+     (42 . font-lock-string-face)
      (43 . font-lock-constant-face)
-     (49 . font-lock-doc-face)
+     (49 . font-lock-string-face)
      (50 . font-lock-constant-face)
-     (60 . font-lock-doc-face)
+     (60 . font-lock-string-face)
      (61 . font-lock-constant-face)
-     (80 . font-lock-doc-face))))
+     (80 . font-lock-string-face))))
 
 (ert-deftest python-font-lock-raw-escape-sequence ()
   (python-tests-assert-faces
    "rb'\\x12 \123 \\n'
 r'\\x12 \123 \\n \\u1234 \\U00010348 \\N{Plus-Minus Sign}'"
    '((1)
-     (3 . font-lock-doc-face) (14)
-     (16 . font-lock-doc-face))))
+     (3 . font-lock-string-face) (14)
+     (16 . font-lock-string-face))))
+
+(ert-deftest python-font-lock-string-literal-concatenation ()
+  "Test for bug#45897."
+  (python-tests-assert-faces
+   "x = \"hello\"\"\"
+y = \"confused\""
+   '((1 . font-lock-variable-name-face) (2)
+     (3 . font-lock-operator-face) (4)
+     (5 . font-lock-string-face) (14)
+     (15 . font-lock-variable-name-face) (16)
+     (17 . font-lock-operator-face) (18)
+     (19 . font-lock-string-face))))
 
 
 ;;; Indentation
@@ -802,7 +713,7 @@ def long_function_name(
    (should (= (python-indent-calculate-indentation) 8))
    (python-tests-look-at "var_four):")
    (should (eq (car (python-indent-context))
-               :inside-paren-newline-start-from-block))
+               :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 8))
    (python-tests-look-at "print (var_one)")
    (should (eq (car (python-indent-context))
@@ -826,8 +737,8 @@ foo = long_function_name(
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
    (should (= (python-indent-calculate-indentation) 4))
    (python-tests-look-at "var_three, var_four)")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
-   (should (= (python-indent-calculate-indentation) 4))))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
+   (should (= (python-indent-calculate-indentation) 2))))
 
 (ert-deftest python-indent-hanging-close-paren ()
   "Like first pep8 case, but with hanging close paren." ;; See Bug#20742.
@@ -983,7 +894,7 @@ data = {
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
    (should (= (python-indent-calculate-indentation) 4))
    (python-tests-look-at "{")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 4))
    (python-tests-look-at "'objlist': [")
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
@@ -995,20 +906,20 @@ data = {
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
    (should (= (python-indent-calculate-indentation) 16))
    (python-tests-look-at "'name': 'first',")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 16))
    (python-tests-look-at "},")
    (should (eq (car (python-indent-context))
                :inside-paren-at-closing-nested-paren))
    (should (= (python-indent-calculate-indentation) 12))
    (python-tests-look-at "{")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 12))
    (python-tests-look-at "'pk': 2,")
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
    (should (= (python-indent-calculate-indentation) 16))
    (python-tests-look-at "'name': 'second',")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 16))
    (python-tests-look-at "}")
    (should (eq (car (python-indent-context))
@@ -1052,7 +963,7 @@ data = {'key': {
    (should (eq (car (python-indent-context)) :inside-paren))
    (should (= (python-indent-calculate-indentation) 9))
    (python-tests-look-at "{'pk': 2,")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 8))
    (python-tests-look-at "'name': 'second'}")
    (should (eq (car (python-indent-context)) :inside-paren))
@@ -1085,10 +996,10 @@ data = ('these',
    (should (eq (car (python-indent-context)) :inside-paren))
    (should (= (python-indent-calculate-indentation) 8))
    (forward-line 1)
-   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 8))
    (forward-line 1)
-   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 8))))
 
 (ert-deftest python-indent-inside-paren-4 ()
@@ -1118,7 +1029,7 @@ while ((not some_condition) and
    (should (eq (car (python-indent-context)) :no-indent))
    (should (= (python-indent-calculate-indentation) 0))
    (forward-line 1)
-   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (eq (car (python-indent-context)) :inside-paren-from-block))
    (should (= (python-indent-calculate-indentation) 7))
    (forward-line 1)
    (should (eq (car (python-indent-context)) :after-block-start))
@@ -1142,7 +1053,7 @@ CHOICES = (('some', 'choice'),
    (should (eq (car (python-indent-context)) :inside-paren))
    (should (= (python-indent-calculate-indentation) 11))
    (forward-line 1)
-   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 11))))
 
 (ert-deftest python-indent-inside-paren-7 ()
@@ -1152,6 +1063,183 @@ CHOICES = (('some', 'choice'),
    (goto-char (point-max))
    ;; This signals an error if the test fails
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))))
+
+(ert-deftest python-indent-inside-paren-8 ()
+  "Test for Bug#63959."
+  (python-tests-with-temp-buffer
+   "
+for a in [  # comment
+          'some',  # Manually indented.
+          'thing']:  # Respect indentation of the previous line.
+"
+   (python-tests-look-at "for a in [  # comment")
+   (should (eq (car (python-indent-context)) :no-indent))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context))
+               :inside-paren-newline-start-from-block))
+   (should (= (python-indent-calculate-indentation) 8))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
+   (should (= (python-indent-calculate-indentation) 10))))
+
+(ert-deftest python-indent-inside-paren-9 ()
+  "Test `:inside-paren-continuation-line'."
+  (python-tests-with-temp-buffer
+   "
+a = (((
+    1, 2),
+      3),  # Do not respect the indentation of the previous line
+     4)  # Do not respect the indentation of the previous line
+b = ((
+        1, 2),  # Manually indented
+     3,  # Do not respect the indentation of the previous line
+     4,  # Respect the indentation of the previous line
+        5,  # Manually indented
+        6)  # Respect the indentation of the previous line
+"
+   (python-tests-look-at "a = (((")
+   (should (eq (car (python-indent-context)) :no-indent))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (= (python-indent-calculate-indentation) 4))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (= (python-indent-calculate-indentation) 6))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (= (python-indent-calculate-indentation) 5))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :after-line))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (= (python-indent-calculate-indentation) 4))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (= (python-indent-calculate-indentation) 5))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
+   (should (= (python-indent-calculate-indentation) 5))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
+   (should (= (python-indent-calculate-indentation) 5))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
+   (should (= (python-indent-calculate-indentation) 8))))
+
+(ert-deftest python-indent-inside-paren-block-1 ()
+  "`python-indent-block-paren-deeper' set to nil (default).
+See Bug#62696."
+  (python-tests-with-temp-buffer
+   "
+if ('VALUE' in my_unnecessarily_long_dictionary and
+    some_other_long_condition_case):
+    do_something()
+elif (some_case or
+      another_case):
+    do_another()
+"
+   (python-tests-look-at "if")
+   (should (eq (car (python-indent-context)) :no-indent))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-from-block))
+   (should (= (python-indent-calculate-indentation) 4))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :after-block-start))
+   (should (= (python-indent-calculate-indentation) 4))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :at-dedenter-block-start))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-from-block))
+   (should (= (python-indent-calculate-indentation) 6))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :after-block-start))
+   (should (= (python-indent-calculate-indentation) 4))))
+
+(ert-deftest python-indent-inside-paren-block-2 ()
+  "`python-indent-block-paren-deeper' set to t.
+See Bug#62696."
+  (python-tests-with-temp-buffer
+   "
+if ('VALUE' in my_unnecessarily_long_dictionary and
+        some_other_long_condition_case):
+    do_something()
+elif (some_case or
+      another_case):
+    do_another()
+"
+   (let ((python-indent-block-paren-deeper t))
+     (python-tests-look-at "if")
+     (should (eq (car (python-indent-context)) :no-indent))
+     (should (= (python-indent-calculate-indentation) 0))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :inside-paren-from-block))
+     (should (= (python-indent-calculate-indentation) 8))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :after-block-start))
+     (should (= (python-indent-calculate-indentation) 4))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :at-dedenter-block-start))
+     (should (= (python-indent-calculate-indentation) 0))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :inside-paren-from-block))
+     (should (= (python-indent-calculate-indentation) 6))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :after-block-start))
+     (should (= (python-indent-calculate-indentation) 4)))))
+
+(ert-deftest python-indent-inside-paren-block-3 ()
+  "With backslash.  `python-indent-block-paren-deeper' set to nil (default).
+See Bug#62696."
+  (python-tests-with-temp-buffer
+   "
+if 'VALUE' in my_uncessarily_long_dictionary and\\
+   (some_other_long_condition_case or
+    another_case):
+    do_something()
+"
+   (python-tests-look-at "if")
+   (should (eq (car (python-indent-context)) :no-indent))
+   (should (= (python-indent-calculate-indentation) 0))
+   (forward-line 1)
+   (should (eq (car (python-indent-context))
+               :after-backslash-block-continuation))
+   (should (= (python-indent-calculate-indentation) 3))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :inside-paren-from-block))
+   (should (= (python-indent-calculate-indentation) 4))
+   (forward-line 1)
+   (should (eq (car (python-indent-context)) :after-block-start))
+   (should (= (python-indent-calculate-indentation) 4))))
+
+(ert-deftest python-indent-inside-paren-block-4 ()
+  "With backslash.  `python-indent-block-paren-deeper' set to t.
+See Bug#62696."
+  (python-tests-with-temp-buffer
+   "
+if 'VALUE' in my_uncessarily_long_dictionary and\\
+   (some_other_long_condition_case or
+        another_case):
+    do_something()
+"
+   (let ((python-indent-block-paren-deeper t))
+     (python-tests-look-at "if")
+     (should (eq (car (python-indent-context)) :no-indent))
+     (should (= (python-indent-calculate-indentation) 0))
+     (forward-line 1)
+     (should (eq (car (python-indent-context))
+                 :after-backslash-block-continuation))
+     (should (= (python-indent-calculate-indentation) 3))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :inside-paren-from-block))
+     (should (= (python-indent-calculate-indentation) 8))
+     (forward-line 1)
+     (should (eq (car (python-indent-context)) :after-block-start))
+     (should (= (python-indent-calculate-indentation) 4)))))
 
 (ert-deftest python-indent-after-block-1 ()
   "The most simple after-block case that shouldn't fail."
@@ -1278,7 +1366,7 @@ objects = Thing.objects.all() \\
    (should (eq (car (python-indent-context)) :inside-paren-newline-start))
    (should (= (python-indent-calculate-indentation) 27))
    (python-tests-look-at "status='bought'")
-   (should (eq (car (python-indent-context)) :inside-paren-newline-start))
+   (should (eq (car (python-indent-context)) :inside-paren-continuation-line))
    (should (= (python-indent-calculate-indentation) 27))
    (python-tests-look-at ") \\")
    (should (eq (car (python-indent-context)) :inside-paren-at-closing-paren))
@@ -1649,7 +1737,7 @@ a == 4):
    (should (= (python-indent-calculate-indentation) 0))
    (should (= (python-indent-calculate-indentation t) 0))
    (python-tests-look-at "a == 4):\n")
-   (should (eq (car (python-indent-context)) :inside-paren))
+   (should (eq (car (python-indent-context)) :inside-paren-from-block))
    (should (= (python-indent-calculate-indentation) 6))
    (python-indent-line)
    (should (= (python-indent-calculate-indentation t) 4))
@@ -1657,6 +1745,21 @@ a == 4):
    (should (= (python-indent-calculate-indentation t) 0))
    (python-indent-line t)
    (should (= (python-indent-calculate-indentation t) 6))))
+
+(ert-deftest python-indent-dedenters-9 ()
+  "Test de-indentation for the case keyword."
+  (python-tests-with-temp-buffer
+   "
+match a:
+    case 1:
+        print(1)
+        case 2
+"
+   (python-tests-look-at "case 2")
+   (should (eq (car (python-indent-context)) :at-dedenter-block-start))
+   (should (= (python-indent-calculate-indentation) 4))
+   (python-indent-line t)
+   (should (= (python-indent-calculate-indentation t) 4))))
 
 (ert-deftest python-indent-inside-string-1 ()
   "Test indentation for strings."
@@ -1982,6 +2085,32 @@ match foo:
    (should (eq (car (python-indent-context)) :after-block-start))
    (should (= (python-indent-calculate-indentation) 8))))
 
+(ert-deftest python-indent-after-re-match ()
+  "Test BUG 62031 regression."
+  (python-tests-with-temp-buffer
+   "
+def test_re(string):
+    if re.match('^[a-c]+$', string):
+        print('yes')
+    else:
+    "
+   (python-tests-look-at "else:")
+   (should (= (python-indent-calculate-indentation) 4))))
+
+(ert-deftest python-indent-after-bare-match ()
+  "Test BUG 62031 regression."
+  (python-tests-with-temp-buffer
+   "
+from re import match
+
+def test_re(string):
+    if match('^[a-c]+$', string):
+        print('yes')
+    else:
+    "
+   (python-tests-look-at "else:")
+   (should (= (python-indent-calculate-indentation) 4))))
+
 
 ;;; Filling
 
@@ -2010,6 +2139,54 @@ this is a test this is a test this is a test this is a test this is a test this 
    (search-forward "test.")
    (fill-paragraph)
    (should (= (current-indentation) 0))))
+
+(ert-deftest python-fill-paragraph-single-quoted-string-1 ()
+  "Single quoted string should not be filled."
+  (let ((contents "
+s = 'abc def ghi jkl mno pqr stu vwx yz'
+")
+        (fill-column 20))
+    (python-tests-with-temp-buffer
+     contents
+     (python-tests-look-at "abc")
+     (fill-paragraph)
+     (should (string= (buffer-substring-no-properties (point-min) (point-max))
+                      contents)))))
+
+(ert-deftest python-fill-paragraph-single-quoted-string-2 ()
+  "Ensure no fill is performed after the end of the single quoted string."
+  (let ((contents "
+s1 = 'abc'
+s2 = 'def'
+"))
+    (python-tests-with-temp-buffer
+     contents
+     (python-tests-look-at "abc")
+     (fill-paragraph)
+     (should (string= (buffer-substring-no-properties (point-min) (point-max))
+                      contents)))))
+
+(ert-deftest python-fill-paragraph-triple-quoted-string-1 ()
+  "Triple quoted string should be filled."
+  (let ((contents "
+s = '''abc def ghi jkl mno pqr stu vwx yz'''
+")
+        (expected "
+s = '''abc def ghi
+jkl mno pqr stu vwx
+yz'''
+")
+        (fill-column 20))
+    (dolist (look-at '("'''abc" "z'''"))
+      (dolist (offset '(0 1 2 3))
+        (python-tests-with-temp-buffer
+         contents
+         (python-tests-look-at look-at)
+         (forward-char offset)
+         (fill-paragraph)
+         (should (string=
+                  (buffer-substring-no-properties (point-min) (point-max))
+                  expected)))))))
 
 
 ;;; Mark
@@ -2942,6 +3119,36 @@ string
   (python-tests-with-temp-buffer
    "'\n''\n"
    (python-nav-end-of-statement)))
+
+(ert-deftest python-nav-end-of-statement-3 ()
+  "Test unmatched quotes (Bug#58780)."
+  (python-tests-with-temp-buffer
+   "
+' \"\"\"
+v = 1
+"
+   (python-tests-look-at "v =")
+   (should (= (save-excursion
+                (python-nav-end-of-statement)
+                (point))
+              (save-excursion
+                (point-max))))))
+
+(ert-deftest python-nav-end-of-statement-4 ()
+  (python-tests-with-temp-buffer
+   "
+abc = 'a\\
+b\\
+c'
+d = '''d'''
+"
+   (python-tests-look-at "b\\")
+   (should (= (save-excursion
+                (python-nav-end-of-statement)
+                (point))
+              (save-excursion
+                (python-tests-look-at "c'")
+                (pos-eol))))))
 
 (ert-deftest python-nav-forward-statement-1 ()
   (python-tests-with-temp-buffer
@@ -4592,6 +4799,98 @@ def foo():
      (end-of-line 0)
      (should-not (nth 2 (python-shell-completion-at-point))))))
 
+(defun python-tests--completion-module ()
+  "Check if modules can be completed in Python shell."
+  (insert "import datet")
+  (completion-at-point)
+  (beginning-of-line)
+  (should (looking-at-p "import datetime"))
+  (kill-line)
+  (insert "from datet")
+  (completion-at-point)
+  (beginning-of-line)
+  (should (looking-at-p "from datetime"))
+  (end-of-line)
+  (insert " import timed")
+  (completion-at-point)
+  (beginning-of-line)
+  (should (looking-at-p "from datetime import timedelta"))
+  (kill-line))
+
+(defun python-tests--completion-parameters ()
+  "Check if parameters can be completed in Python shell."
+  (insert "import re")
+  (comint-send-input)
+  (python-tests-shell-wait-for-prompt)
+  (insert "re.split('b', 'abc', maxs")
+  (completion-at-point)
+  (should (string= "re.split('b', 'abc', maxsplit="
+                   (buffer-substring (line-beginning-position) (point))))
+  (insert "0, ")
+  (should (python-shell-completion-at-point))
+  ;; Test if cache is used.
+  (cl-letf (((symbol-function 'python-shell-completion-get-completions)
+             'ignore)
+            ((symbol-function 'python-shell-completion-native-get-completions)
+             'ignore))
+    (insert "fla")
+    (completion-at-point)
+    (should (string= "re.split('b', 'abc', maxsplit=0, flags="
+                     (buffer-substring (line-beginning-position) (point)))))
+  (beginning-of-line)
+  (kill-line))
+
+(defun python-tests--completion-extra-context ()
+  "Check if extra context is used for completion."
+  (insert "re.split('b', 'abc',")
+  (comint-send-input)
+  (python-tests-shell-wait-for-prompt)
+  (insert "maxs")
+  (completion-at-point)
+  (should (string= "maxsplit="
+                   (buffer-substring (line-beginning-position) (point))))
+  (insert "0)")
+  (comint-send-input)
+  (python-tests-shell-wait-for-prompt)
+  (insert "from re import (")
+  (comint-send-input)
+  (python-tests-shell-wait-for-prompt)
+  (insert "IGN")
+  (completion-at-point)
+  (should (string= "IGNORECASE"
+                   (buffer-substring (line-beginning-position) (point)))))
+
+(ert-deftest python-shell-completion-at-point-jedi-completer ()
+  "Check if Python shell completion works when Jedi completer is used."
+  (skip-unless (executable-find python-tests-shell-interpreter))
+  (python-tests-with-temp-buffer-with-shell
+   ""
+   (python-shell-with-shell-buffer
+     (python-shell-completion-native-turn-on)
+     (skip-unless (string= python-shell-readline-completer-delims ""))
+     (python-tests--completion-module)
+     (python-tests--completion-parameters)
+     (python-tests--completion-extra-context))))
+
+(ert-deftest python-shell-completion-at-point-ipython ()
+  "Check if Python shell completion works for IPython."
+  (let ((python-shell-interpreter "ipython")
+        (python-shell-interpreter-args "-i --simple-prompt"))
+    (skip-unless
+     (and
+      (executable-find python-shell-interpreter)
+      (eql (call-process python-shell-interpreter nil nil nil "--version") 0)))
+    (python-tests-with-temp-buffer-with-shell
+     ""
+     (python-shell-with-shell-buffer
+       (python-shell-completion-native-turn-off)
+       (python-tests--completion-module)
+       (python-tests--completion-parameters)
+       (python-shell-completion-native-turn-on)
+       (skip-unless (string= python-shell-readline-completer-delims ""))
+       (python-tests--completion-module)
+       (python-tests--completion-parameters)
+       (python-tests--completion-extra-context)))))
 
 
 ;;; PDB Track integration
@@ -4738,11 +5037,6 @@ import abc
 
 (ert-deftest python-ffap-module-path-1 ()
   (skip-unless (executable-find python-tests-shell-interpreter))
-  ;; Skip the test on macOS, since the standard Python installation uses
-  ;; libedit rather than readline which confuses the running of an inferior
-  ;; interpreter in this case (see bug#59477 and bug#25753).
-  (skip-unless (not (eq system-type 'darwin)))
-  (trace-function 'python-shell-output-filter)
   (python-tests-with-temp-buffer-with-shell
    "
 import abc
@@ -5208,6 +5502,20 @@ def decoratorFunctionWithArguments(arg1, arg2, arg3):
                     "decoratorFunctionWithArguments"))
    (should (string= (python-info-current-defun t)
                     "def decoratorFunctionWithArguments"))))
+
+(ert-deftest python-info-current-defun-4 ()
+  "Ensure unmatched quotes do not cause hang (Bug#58780)."
+  (python-tests-with-temp-buffer
+   "
+def func():
+    ' \"\"\"
+    v = 1
+"
+   (python-tests-look-at "v = 1")
+   (should (string= (python-info-current-defun)
+                    "func"))
+   (should (string= (python-info-current-defun t)
+                    "def func"))))
 
 (ert-deftest python-info-current-symbol-1 ()
   (python-tests-with-temp-buffer
@@ -5782,9 +6090,29 @@ def func():
         else
 "
    (python-tests-look-at "else\n")
-    (should
-     (equal (list (python-tests-look-at "if (" -1 t))
-            (python-info-dedenter-opening-block-positions)))))
+   (should
+    (equal (list (python-tests-look-at "if (" -1 t))
+           (python-info-dedenter-opening-block-positions)))))
+
+(ert-deftest python-info-dedenter-opening-block-positions-7 ()
+  "Test case blocks."
+  (python-tests-with-temp-buffer
+   "
+match a:
+    case 1:
+        match b:
+            case 2:
+                something()
+            case 3:
+"
+   (python-tests-look-at "case 1:")
+   (should-not (python-info-dedenter-opening-block-positions))
+   (python-tests-look-at "case 2:")
+   (should-not (python-info-dedenter-opening-block-positions))
+   (python-tests-look-at "case 3:")
+   (should (equal (list (python-tests-look-at "case 2:" -1 t)
+                        (python-tests-look-at "case 1:" -1 t))
+                  (python-info-dedenter-opening-block-positions)))))
 
 (ert-deftest python-info-dedenter-opening-block-message-1 ()
   "Test dedenters inside strings are ignored."
@@ -5970,6 +6298,24 @@ elif b:
                  (back-to-indentation)
                  (point))
                (python-info-dedenter-statement-p)))))
+
+(ert-deftest python-info-dedenter-statement-p-6 ()
+  "Test case keyword."
+  (python-tests-with-temp-buffer
+      "
+match a:  # Comment
+    case 1:
+        match b:
+            case 2:
+                something()
+            case 3:
+"
+    (python-tests-look-at "case 1:")
+    (should-not (python-info-dedenter-statement-p))
+    (python-tests-look-at "case 2:")
+    (should-not (python-info-dedenter-statement-p))
+    (python-tests-look-at "case 3:")
+    (should (= (point) (python-info-dedenter-statement-p)))))
 
 (ert-deftest python-info-line-ends-backslash-p-1 ()
   (python-tests-with-temp-buffer
@@ -6405,6 +6751,77 @@ class Class:
    (should (python-info-docstring-p))
    (python-tests-look-at "'''Not a method docstring.'''")
    (should (not (python-info-docstring-p)))))
+
+(ert-deftest python-info-docstring-p-7 ()
+  "Test string in a dictionary."
+  (python-tests-with-temp-buffer
+   "
+{'Not a docstring': 1}
+'Also not a docstring'
+"
+   (python-tests-look-at "Not a docstring")
+   (should-not (python-info-docstring-p))
+   (python-tests-look-at "Also not a docstring")
+   (should-not (python-info-docstring-p))))
+
+(ert-deftest python-info-docstring-p-8 ()
+  "Test string in the 2nd line of a buffer."
+  (python-tests-with-temp-buffer
+   "import sys
+'''Not a docstring.'''
+"
+   (python-tests-look-at "Not a docstring")
+   (should-not (python-info-docstring-p))))
+
+(ert-deftest python-info-triple-quoted-string-p-1 ()
+  "Test triple quoted string."
+  (python-tests-with-temp-buffer
+   "
+t = '''Triple'''
+"
+   (python-tests-look-at " '''Triple")
+   (should-not
+    (python-tests-should-not-move
+     #'python-info-triple-quoted-string-p))
+   (forward-char)
+   (let ((start-pos (+ (point) 2))
+         (eol (pos-eol)))
+     (while (< (point) eol)
+       (should (= (python-tests-should-not-move
+                   #'python-info-triple-quoted-string-p)
+                  start-pos))
+       (forward-char)))
+   (dolist (pos `(,(point) ,(point-min) ,(point-max)))
+     (goto-char pos)
+     (should-not
+      (python-tests-should-not-move
+       #'python-info-triple-quoted-string-p)))))
+
+(ert-deftest python-info-triple-quoted-string-p-2 ()
+  "Test empty triple quoted string."
+  (python-tests-with-temp-buffer
+   "
+e = ''''''
+"
+   (python-tests-look-at "''''''")
+   (let ((start-pos (+ (point) 2))
+         (eol (pos-eol)))
+     (while (< (point) eol)
+       (should (= (python-tests-should-not-move
+                   #'python-info-triple-quoted-string-p)
+                  start-pos))
+       (forward-char)))))
+
+(ert-deftest python-info-triple-quoted-string-p-3 ()
+  "Test single quoted string."
+  (python-tests-with-temp-buffer
+   "
+s = 'Single'
+"
+   (while (< (point) (point-max))
+     (should-not (python-tests-should-not-move
+                  #'python-info-triple-quoted-string-p))
+     (forward-char))))
 
 (ert-deftest python-info-encoding-from-cookie-1 ()
   "Should detect it on first line."
@@ -7007,6 +7424,308 @@ buffer with overlapping strings."
                      (if type
                          "Unused import a.b.c (unused-import)"
                        "W0611: Unused import a.b.c (unused-import)"))))))
+
+;;; python-ts-mode font-lock tests
+
+(defmacro python-ts-tests-with-temp-buffer (contents &rest body)
+  "Create a `python-ts-mode' enabled temp buffer with CONTENTS.
+BODY is code to be executed within the temp buffer.  Point is
+always located at the beginning of buffer."
+  (declare (indent 1) (debug t))
+  `(with-temp-buffer
+     (skip-unless (treesit-ready-p 'python))
+     (require 'python)
+     (let ((python-indent-guess-indent-offset nil))
+       (python-ts-mode)
+       (setopt treesit-font-lock-level 3)
+       (insert ,contents)
+       (font-lock-ensure)
+       (goto-char (point-min))
+       ,@body)))
+
+(ert-deftest python-ts-mode-compound-keywords-face ()
+  (dolist (test '("is not" "not in"))
+    (python-ts-tests-with-temp-buffer
+     (concat "t " test " t")
+     (forward-to-word 1)
+     (should (eq (face-at-point) font-lock-keyword-face))
+     (forward-to-word 1)
+     (should (eq (face-at-point) font-lock-keyword-face)))))
+
+(ert-deftest python-ts-mode-named-assignement-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "var := 3"
+   (should (eq (face-at-point) font-lock-variable-name-face))))
+
+(ert-deftest python-ts-mode-assignement-face-2 ()
+  (python-ts-tests-with-temp-buffer
+   "var, *rest = call()"
+   (dolist (test '("var" "rest"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-variable-name-face))))
+
+  (python-ts-tests-with-temp-buffer
+   "def func(*args):"
+   (dolist (test '("args"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-variable-name-face))))))
+
+(ert-deftest python-ts-mode-nested-types-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "def func(v:dict[ list[ tuple[str] ], int | None] | None):"
+   (dolist (test '("dict" "list" "tuple" "str" "int" "None" "None"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-union-types-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "def f(val: tuple[tuple, list[Lvl1 | Lvl2[Lvl3[Lvl4[Lvl5 | None]], Lvl2]]]):"
+   (dolist (test '("tuple" "tuple" "list" "Lvl1" "Lvl2" "Lvl3" "Lvl4" "Lvl5" "None" "Lvl2"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-union-types-face-2 ()
+  (python-ts-tests-with-temp-buffer
+   "def f(val: Type0 | Type1[Type2, pack0.Type3] | pack1.pack2.Type4 | None):"
+   (dolist (test '("Type0" "Type1" "Type2" "Type3" "Type4" "None"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))
+
+   (goto-char (point-min))
+   (dolist (test '("pack0" "pack1" "pack2"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))))
+
+(ert-deftest python-ts-mode-types-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "def f(val: Callable[[Type0], (Type1, Type2)]):"
+   (dolist (test '("Callable" "Type0" "Type1" "Type2"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-types-face-2 ()
+  (python-ts-tests-with-temp-buffer
+   "def annot3(val:pack0.Type0)->pack1.pack2.pack3.Type1:"
+   (dolist (test '("Type0" "Type1"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))
+   (goto-char (point-min))
+   (dolist (test '("pack0" "pack1" "pack2" "pack3"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))))
+
+(ert-deftest python-ts-mode-types-face-3 ()
+  (python-ts-tests-with-temp-buffer
+   "def annot3(val:collections.abc.Iterator[Type0]):"
+   (dolist (test '("Iterator" "Type0"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))
+   (goto-char (point-min))
+   (dolist (test '("collections" "abc"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))))
+
+(ert-deftest python-ts-mode-isinstance-type-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "isinstance(var1, pkg.Type0)
+    isinstance(var2, (str, dict, Type1, type(None)))
+    isinstance(var3, my_type())"
+
+   (dolist (test '("var1" "pkg" "var2" "type" "None" "var3" "my_type"))
+     (let ((case-fold-search nil))
+       (search-forward test))
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))
+
+   (goto-char (point-min))
+   (dolist (test '("Type0" "str" "dict" "Type1"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-isinstance-type-face-2 ()
+  (python-ts-tests-with-temp-buffer
+   "issubclass(mytype, int|list|collections.abc.Iterable)"
+   (dolist (test '("int" "list" "Iterable"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-isinstance-type-face-3 ()
+  (python-ts-tests-with-temp-buffer
+   "issubclass(mytype, typevar1)
+    isinstance(mytype, (Type1, typevar2, tuple, abc.Coll))
+    isinstance(mytype, pkg0.Type2|self.typevar3|typevar4)"
+
+   (dolist (test '("typevar1" "typevar2" "pkg0" "self" "typevar3" "typevar4"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))
+
+   (goto-char (point-min))
+   (dolist (test '("Type1" "tuple" "Coll" "Type2"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-superclass-type-face ()
+  (python-ts-tests-with-temp-buffer
+   "class Temp(Base1, pack0.Base2,  Sequence[T1, T2]):"
+
+   (dolist (test '("Base1" "Base2" "Sequence" "T1" "T2"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))
+
+   (goto-char (point-min))
+   (dolist (test '("pack0"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))))
+
+(ert-deftest python-ts-mode-class-patterns-face ()
+  (python-ts-tests-with-temp-buffer
+   "match tt:
+        case str():
+            pass
+        case [Type0() | bytes(b) | pack0.pack1.Type1()]:
+            pass
+        case {'i': int(i), 'f': float() as f}:
+            pass"
+
+   (dolist (test '("str" "Type0" "bytes" "Type1" "int" "float"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))
+
+   (goto-char (point-min))
+   (dolist (test '("pack0" "pack1"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-type-face))))))
+
+(ert-deftest python-ts-mode-dotted-decorator-face-1 ()
+  (python-ts-tests-with-temp-buffer
+   "@pytest.mark.skip
+    @pytest.mark.skip(reason='msg')
+    def test():"
+
+   (dolist (test '("pytest" "mark" "skip" "pytest" "mark" "skip"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-dotted-decorator-face-2 ()
+  (python-ts-tests-with-temp-buffer
+   "@pytest.mark.skip(reason='msg')
+    def test():"
+
+   (setopt treesit-font-lock-level 4)
+   (dolist (test '("pytest" "mark" "skip"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-type-face)))))
+
+(ert-deftest python-ts-mode-builtin-call-face ()
+  (python-ts-tests-with-temp-buffer
+   "all()"
+   ;; enable 'function' feature from 4th level
+   (setopt treesit-font-lock-level 4)
+   (should (eq (face-at-point) font-lock-builtin-face))))
+
+(ert-deftest python-ts-mode-interpolation-nested-string ()
+  (python-ts-tests-with-temp-buffer
+   "t = f\"beg {True + 'string'}\""
+
+   (search-forward "True")
+   (goto-char (match-beginning 0))
+   (should (eq (face-at-point) font-lock-constant-face))
+
+   (goto-char (point-min))
+   (dolist (test '("f" "{" "+" "}"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-string-face))))
+
+
+   (goto-char (point-min))
+   (dolist (test '("beg" "'string'" "\""))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-string-face)))))
+
+(ert-deftest python-ts-mode-level-fontification-wo-interpolation ()
+  (python-ts-tests-with-temp-buffer
+   "t = f\"beg {True + var}\""
+
+   (setopt treesit-font-lock-level 2)
+   (search-forward "f")
+   (goto-char (match-beginning 0))
+   (should (not (eq (face-at-point) font-lock-string-face)))
+
+   (dolist (test '("\"" "beg" "{" "True" "var" "}" "\""))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-string-face)))))
+
+(ert-deftest python-ts-mode-disabled-string-interpolation ()
+  (python-ts-tests-with-temp-buffer
+   "t = f\"beg {True + var}\""
+
+   (unwind-protect
+       (progn
+         (setf (nth 2 treesit-font-lock-feature-list)
+               (remq 'string-interpolation (nth 2 treesit-font-lock-feature-list)))
+         (setopt treesit-font-lock-level 3)
+
+         (search-forward "f")
+         (goto-char (match-beginning 0))
+         (should (not (eq (face-at-point) font-lock-string-face)))
+
+         (dolist (test '("\"" "beg" "{" "True" "var" "}" "\""))
+           (search-forward test)
+           (goto-char (match-beginning 0))
+           (should (eq (face-at-point) font-lock-string-face))))
+
+    (setf (nth 2 treesit-font-lock-feature-list)
+          (append (nth 2 treesit-font-lock-feature-list) '(string-interpolation))))))
+
+(ert-deftest python-ts-mode-interpolation-doc-string ()
+  (python-ts-tests-with-temp-buffer
+   "f\"\"\"beg {'s1' + True + 's2'} end\"\"\""
+
+   (search-forward "True")
+   (goto-char (match-beginning 0))
+   (should (eq (face-at-point) font-lock-constant-face))
+
+   (goto-char (point-min))
+   (dolist (test '("f" "{" "+" "}"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (not (eq (face-at-point) font-lock-string-face))))
+
+   (goto-char (point-min))
+   (dolist (test '("\"\"\"" "beg" "end" "\"\"\""))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-doc-face)))
+
+   (goto-char (point-min))
+   (dolist (test '("'s1'" "'s2'"))
+     (search-forward test)
+     (goto-char (match-beginning 0))
+     (should (eq (face-at-point) font-lock-string-face)))))
 
 (provide 'python-tests)
 

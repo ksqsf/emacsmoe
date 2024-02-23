@@ -1,4 +1,4 @@
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 See the end of the file for license conditions.
 
 
@@ -95,6 +95,11 @@ There are several subdirectories:
 'admin'     holds files used by Emacs developers, and Unicode data files.
 'build-aux' holds auxiliary files used during the build.
 'm4'        holds Autoconf macros used for generating the configure script.
+'java'	    holds the Java code for the Emacs port to Android.
+'cross'	    holds Makefiles and an additional copy of gnulib used to build
+	    Emacs for Android devices.
+'exec'	    holds the source code to several helper executables used to run
+	    user-installed programs on Android.
 
    Building Emacs on non-Posix platforms requires tools that aren't part
 of the standard distribution of the OS.  The platform-specific README

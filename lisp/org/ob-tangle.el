@@ -1,6 +1,6 @@
 ;;; ob-tangle.el --- Extract Source Code From Org Files -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2009-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2024 Free Software Foundation, Inc.
 
 ;; Author: Eric Schulte
 ;; Keywords: literate programming, reproducible research
@@ -158,9 +158,9 @@ result.  The default value is `org-remove-indentation'."
   :version "24.1"
   :type 'function)
 
-(defcustom org-babel-tangle-default-file-mode #o544
+(defcustom org-babel-tangle-default-file-mode #o644
   "The default mode used for tangled files, as an integer.
-The default value 356 correspands to the octal #o544, which is
+The default value 420 correspands to the octal #o644, which is
 read-write permissions for the user, read-only for everyone else."
   :group 'org-babel-tangle
   :package-version '(Org . "9.6")
@@ -357,13 +357,13 @@ Did you give the decimal value %1$d by mistake?" mode)))
     (error "File mode %S not recognized as a valid format." mode))
    ((string-match-p "^o0?[0-7][0-7][0-7]$" mode)
     (string-to-number (replace-regexp-in-string "^o" "" mode) 8))
-   ((string-match-p "^[ugoa]*\\(?:[+-=][rwxXstugo]*\\)+\\(,[ugoa]*\\(?:[+-=][rwxXstugo]*\\)+\\)*$" mode)
+   ((string-match-p "^[ugoa]*\\(?:[+=-][rwxXstugo]*\\)+\\(,[ugoa]*\\(?:[+=-][rwxXstugo]*\\)+\\)*$" mode)
     ;; Match regexp taken from `file-modes-symbolic-to-number'.
     (file-modes-symbolic-to-number mode org-babel-tangle-default-file-mode))
    ((string-match-p "^[r-][w-][xs-][r-][w-][xs-][r-][w-][x-]$" mode)
-    (file-modes-symbolic-to-number (concat  "u=" (substring mode 0 3)
-                                            ",g=" (substring mode 3 6)
-                                            ",o=" (substring mode 6 9))
+    (file-modes-symbolic-to-number (concat "u="  (delete ?- (substring mode 0 3))
+                                           ",g=" (delete ?- (substring mode 3 6))
+                                           ",o=" (delete ?- (substring mode 6 9)))
                                    0))
    (t (error "File mode %S not recognized as a valid format. See `org-babel-interpret-file-mode'." mode))))
 
@@ -513,6 +513,7 @@ The PARAMS are the 3rd element of the info for the same src block."
                                            (cdr (assq :tangle params)))))
             bare))))))
 
+(defvar org-outline-regexp) ; defined in lisp/org.el
 (defun org-babel-tangle-single-block (block-counter &optional only-this-block)
   "Collect the tangled source for current block.
 Return the list of block attributes needed by
@@ -570,8 +571,8 @@ non-nil, return the full association list to be used by
 	     (buffer-substring
 	      (max (condition-case nil
 		       (save-excursion
-			 (org-back-to-heading t) ; Sets match data
-			 (match-end 0))
+			 (org-back-to-heading t)
+			 (re-search-forward org-outline-regexp))
 		     (error (point-min)))
 		   (save-excursion
 		     (if (re-search-backward

@@ -1,6 +1,6 @@
 ;;; dired-tests.el --- Test suite. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -241,12 +241,12 @@
             (let ((buffers (find-file (concat (file-name-as-directory test-dir)
                                               "*")
                                       t)))
+              (setq allbufs (append buffers allbufs))
               (dolist (buf buffers)
                 (let ((pt (with-current-buffer buf (point))))
                   (switch-to-buffer (find-file-noselect test-dir))
                   (find-file (buffer-name buf))
-                  (should (equal (point) pt))))
-              (append buffers allbufs)))
+                  (should (equal (point) pt))))))
         (dolist (buf allbufs)
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
@@ -270,8 +270,8 @@
   "Test for https://debbugs.gnu.org/27631 ."
   ;; For dired using 'ls' emulation we test for this bug in
   ;; ls-lisp-tests.el and em-ls-tests.el.
-  (skip-unless (and (not (featurep 'ls-lisp))
-                    (not (featurep 'eshell))))
+  (skip-unless (not (or (featurep 'ls-lisp)
+                        (featurep 'eshell))))
   (ert-with-temp-directory dir
     (let* ((dir1 (expand-file-name "dir1" dir))
            (dir2 (expand-file-name "dir2" dir))
@@ -477,9 +477,9 @@
             ;;(should (= 0 (length (directory-files testdir nil "[0-9]" t -1))))
             (should (= 5 (length (directory-files testdir nil "[0-9]" t))))
             (should (= 5 (length (directory-files testdir nil "[0-9]" t 50))))
-            (should-not (directory-empty-p testdir)))
+            (should-not (directory-empty-p testdir))))
 
-          (delete-directory testdir t)))))
+      (delete-directory testdir t))))
 
 (ert-deftest dired-test-directory-files-and-attributes ()
   "Test for `directory-files-and-attributes'."

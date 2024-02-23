@@ -1,6 +1,6 @@
 ;;; emoji.el --- Inserting emojis  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2021-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 ;; Author: Lars Ingebrigtsen <larsi@gnus.org>
 ;; Keywords: fun
@@ -97,7 +97,7 @@ representing names.  For instance:
                        (multisession-value emoji--recent)))
 
 ;;;###autoload (autoload 'emoji-search "emoji" nil t)
-(transient-define-prefix emoji-search ()
+(transient-define-prefix emoji-search (glyph derived)
   "Choose and insert an emoji glyph by typing its Unicode name.
 This command prompts for an emoji name, with completion, and
 inserts it.  It recognizes the Unicode Standard names of emoji,
@@ -106,15 +106,17 @@ and also consults the `emoji-alternate-names' alist."
   [:class transient-columns
    :setup-children emoji--setup-suffixes
    :description emoji--group-description]
-  (interactive "*")
-  (emoji--init)
-  (pcase-let ((`(,glyph . ,derived) (emoji--read-emoji)))
-    (if derived
-        (emoji--setup-prefix 'emoji-search "Choose Emoji"
-                             (list glyph)
-                             (cons glyph derived))
-      (emoji--add-recent glyph)
-      (insert glyph))))
+  (interactive
+   (progn (barf-if-buffer-read-only)
+          (emoji--init)
+          (let ((cons (emoji--read-emoji)))
+            (list (car cons) (cdr cons)))))
+  (if derived
+      (emoji--setup-prefix 'emoji-search "Choose Emoji"
+                           (list glyph)
+                           (cons glyph derived))
+    (emoji--add-recent glyph)
+    (insert glyph)))
 
 (defclass emoji--narrow (transient-suffix)
   ((title :initarg :title)
@@ -142,20 +144,23 @@ and also consults the `emoji-alternate-names' alist."
 (defun emoji--group-description ()
   (car (oref transient--prefix scope)))
 
-(transient-define-suffix emoji-insert-glyph ()
+(transient-define-suffix emoji-insert-glyph (glyph)
   "Insert the emoji you selected."
-  (interactive nil not-a-mode)
-  (let ((glyph (oref (transient-suffix-object) description)))
-    (emoji--add-recent glyph)
-    (insert glyph)))
+  (interactive
+   (list (if (string-prefix-p "emoji-" (symbol-name transient-current-command))
+             (oref (transient-suffix-object) description)
+           (car (multisession-value emoji--recent))))
+   not-a-mode)
+  (emoji--add-recent glyph)
+  (insert glyph))
 
 ;;;###autoload
 (defun emoji-list ()
-  "List emojis and insert the one that's selected.
+  "List emojis and allow selecting and inserting one of them.
 Select the emoji by typing \\<emoji-list-mode-map>\\[emoji-list-select] on its picture.
 The glyph will be inserted into the buffer that was current
 when the command was invoked."
-  (interactive "*")
+  (interactive)
   (let ((buf (current-buffer)))
     (emoji--init)
     (switch-to-buffer (get-buffer-create "*Emoji*"))
@@ -268,7 +273,9 @@ the name is not known."
     (let ((buf emoji--insert-buffer))
       (quit-window)
       (if (buffer-live-p buf)
-          (switch-to-buffer buf)
+          (progn
+            (switch-to-buffer buf)
+            (barf-if-buffer-read-only))
         (error "Buffer disappeared")))
     (let ((derived (gethash glyph emoji--derived)))
       (if derived
@@ -676,44 +683,73 @@ We prefer the earliest unique letter."
                            strings))))
 	       (complete-with-action action table string pred)))
            nil t)))
-    (when (cl-plusp (length name))
-      (let ((glyph (if emoji-alternate-names
-                       (cadr (split-string name "\t"))
-                     (gethash name emoji--all-bases))))
-        (cons glyph (gethash glyph emoji--derived))))))
+    (if (cl-plusp (length name))
+        (let ((glyph (if emoji-alternate-names
+                         (cadr (split-string name "\t"))
+                       (gethash name emoji--all-bases))))
+          (cons glyph (gethash glyph emoji--derived)))
+      (user-error "You didn't specify an emoji"))))
 
 (defvar-keymap emoji-zoom-map
   "+" #'emoji-zoom-increase
-  "-" #'emoji-zoom-decrease)
+  "-" #'emoji-zoom-decrease
+  "0" #'emoji-zoom-reset)
 
 ;;;###autoload
 (defun emoji-zoom-increase (&optional factor)
   "Increase the size of the character under point.
 FACTOR is the multiplication factor for the size."
   (interactive)
-  (set-transient-map emoji-zoom-map t nil "Zoom with %k")
-  (let* ((factor (or factor 1.1))
-         (old (get-text-property (point) 'face))
-         (height (or (and (consp old)
-                          (plist-get old :height))
-                     1.0))
-         (inhibit-read-only t))
-    (with-silent-modifications
-      (if (consp old)
-          (add-text-properties
-           (point) (1+ (point))
-           (list 'face (plist-put (copy-sequence old) :height (* height factor))
-                 'rear-nonsticky t))
-        (add-face-text-property (point) (1+ (point))
-                                (list :height (* height factor)))
-        (put-text-property (point) (1+ (point))
-                           'rear-nonsticky t)))))
+  (set-transient-map emoji-zoom-map t #'redisplay "Zoom with %k")
+  (unless (eobp)
+    (let* ((factor (or factor 1.1))
+           (old (get-text-property (point) 'face))
+           ;; The text property is either a named face, or a plist
+           ;; with :height, or a list starting with such a plist,
+           ;; followed by one or more faces.
+           (newheight (* (or (and (consp old)
+                                  (or (plist-get (car old) :height)
+                                      (plist-get old :height)))
+                             1.0)
+                         factor))
+           (inhibit-read-only t))
+      (with-silent-modifications
+        (if (consp old)
+            (add-text-properties
+             (point) (1+ (point))
+             (list 'face
+                   (cond
+                    ((eq (car old) :height)
+                     (plist-put (copy-sequence old) :height newheight))
+                    ((plistp (car old))
+                     (cons (plist-put (car old) :height newheight)
+                           (cdr old)))
+                    (t
+                     (append (list (list :height newheight)) old)))
+                   'rear-nonsticky t))
+          (add-face-text-property (point) (1+ (point))
+                                  (list :height newheight))
+          (put-text-property (point) (1+ (point))
+                             'rear-nonsticky t))))))
 
 ;;;###autoload
 (defun emoji-zoom-decrease ()
   "Decrease the size of the character under point."
   (interactive)
   (emoji-zoom-increase 0.9))
+
+;;;###autoload
+(defun emoji-zoom-reset ()
+  "Reset the size of the character under point."
+  (interactive)
+  (with-silent-modifications
+    (let ((old (get-text-property (point) 'face)))
+      (when (and (consp old)
+                 (remove-text-properties (point) (1+ (point)) '(rear-nonsticky nil)))
+        (if (eq (car old) :height)
+            (remove-text-properties (point) (1+ (point)) '(face nil))
+          (add-text-properties (point) (1+ (point)) (list 'face
+                                                      (cdr old))))))))
 
 (provide 'emoji)
 

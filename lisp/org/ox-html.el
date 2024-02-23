@@ -1,11 +1,11 @@
 ;;; ox-html.el --- HTML Back-End for Org Export Engine -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2011-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2024 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <carsten.dominik@gmail.com>
 ;;      Jambunathan K <kjambunathan at gmail dot com>
 ;; Maintainer: TEC <orgmode@tec.tecosaur.net>
-;; Keywords: outlines, hypermedia, calendar, wp
+;; Keywords: outlines, hypermedia, calendar, text
 
 ;; This file is part of GNU Emacs.
 
@@ -2969,7 +2969,7 @@ CONTENTS is nil.  INFO is a plist holding contextual information."
 	 ((string= "listings" value) (org-html-list-of-listings info))
 	 ((string= "tables" value) (org-html-list-of-tables info))))))))
 
-;;;; Latex Environment
+;;;; LaTeX Environment
 
 (defun org-html-format-latex (latex-frag processing-type info)
   "Format a LaTeX fragment LATEX-FRAG into HTML.
@@ -3086,7 +3086,7 @@ CONTENTS is nil.  INFO is a plist holding contextual information."
 	     info caption label)))))
      (t (org-html--wrap-latex-environment latex-frag info caption label)))))
 
-;;;; Latex Fragment
+;;;; LaTeX Fragment
 
 (defun org-html-latex-fragment (latex-fragment _contents info)
   "Transcode a LATEX-FRAGMENT object from Org to HTML.
@@ -3094,6 +3094,7 @@ CONTENTS is nil.  INFO is a plist holding contextual information."
   (let ((latex-frag (org-element-property :value latex-fragment))
 	(processing-type (plist-get info :with-latex)))
     (cond
+     ;; FIXME: Duplicated value in ‘cond’: t
      ((memq processing-type '(t mathjax))
       (org-html-format-latex latex-frag 'mathjax info))
      ((memq processing-type '(t html))

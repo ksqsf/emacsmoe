@@ -1,6 +1,6 @@
 ;;; jsonrpc-tests.el --- tests for jsonrpc.el        -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2018-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2018-2024 Free Software Foundation, Inc.
 
 ;; Author: João Távora <joaotavora@gmail.com>
 ;; Keywords: tests
@@ -103,6 +103,7 @@
                         (process-get listen-server 'handlers))))))))
 
 (cl-defmacro jsonrpc--with-emacsrpc-fixture ((endpoint-sym) &body body)
+  (declare (indent 1))
   `(jsonrpc--call-with-emacsrpc-fixture (lambda (,endpoint-sym) ,@body)))
 
 (ert-deftest returns-3 ()
@@ -124,7 +125,7 @@
   "Signals an -32603 JSONRPC error."
   (jsonrpc--with-emacsrpc-fixture (conn)
     (condition-case err
-        (progn
+        (let ((jsonrpc-inhibit-debug-on-error t))
           (jsonrpc-request conn '+ ["a" 2])
           (ert-fail "A `jsonrpc-error' should have been signaled!"))
       (jsonrpc-error
@@ -150,14 +151,6 @@
     (should (equal
              [1 2 3 3 4 5]
              (jsonrpc-request conn 'vconcat [[1 2 3] [3 4 5]])))))
-
-(ert-deftest json-el-cant-serialize-this ()
-  "Can't serialize a response that is half-vector/half-list."
-  (jsonrpc--with-emacsrpc-fixture (conn)
-                                  (should-error
-                                   ;; (append [1 2 3] [3 4 5]) => (1 2 3 . [3 4 5]), which can't be
-                                   ;; serialized
-                                   (jsonrpc-request conn 'append [[1 2 3] [3 4 5]]))))
 
 (cl-defmethod jsonrpc-connection-ready-p
   ((conn jsonrpc--test-client) what)

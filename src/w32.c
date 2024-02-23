@@ -1,6 +1,6 @@
 /* Utility and Unix shadow routines for GNU Emacs on the Microsoft Windows API.
 
-Copyright (C) 1994-1995, 2000-2023 Free Software Foundation, Inc.
+Copyright (C) 1994-1995, 2000-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -543,7 +543,14 @@ typedef LANGID (WINAPI *GetUserDefaultUILanguage_Proc) (void);
 
 typedef COORD (WINAPI *GetConsoleFontSize_Proc) (HANDLE, DWORD);
 
-#if _WIN32_WINNT < 0x0501
+/* Old versions of mingw.org's MinGW, before v5.2.0, don't have a
+   _WIN32_WINNT guard for CONSOLE_FONT_INFO in wincon.h, and so don't
+   need the conditional definition below, which causes compilation
+   errors.  Note: MinGW64 sets _WIN32_WINNT to a higher version, and
+   its w32api.h version stays fixed at 3.14.  */
+#if _WIN32_WINNT < 0x0501 \
+    && (__W32API_MAJOR_VERSION > 5 \
+	|| (__W32API_MAJOR_VERSION == 5 && __W32API_MINOR_VERSION >= 2))
 typedef struct
 {
   DWORD nFont;
@@ -9380,7 +9387,7 @@ sys_write (int fd, const void * buffer, unsigned int count)
 	 break them into smaller chunks.  See the Comments section of
 	 the MSDN documentation of WriteFile for details behind the
 	 choice of the value of CHUNK below.  See also the thread
-	 http://thread.gmane.org/gmane.comp.version-control.git/145294
+	 http://thread.gmane.org/gmane.comp.version-control.git/145294 [dead link]
 	 in the git mailing list.  */
       const unsigned char *p = buffer;
       const bool is_pipe = (fd < MAXDESC
@@ -9407,7 +9414,7 @@ sys_write (int fd, const void * buffer, unsigned int count)
       errno = 0;
       while (count > 0)
 	{
-	  unsigned this_chunk = count < chunk ? count : chunk;
+	  unsigned this_chunk = min (count, chunk);
 	  int n = _write (fd, p, this_chunk);
 
 	  if (n > 0)
@@ -10328,7 +10335,8 @@ check_windows_init_file (void)
 	 names from UTF-8 to ANSI.  */
       init_file = build_string ("term/w32-win");
       fd =
-	openp (Vload_path, init_file, Fget_load_suffixes (), NULL, Qnil, 0, 0);
+	openp (Vload_path, init_file, Fget_load_suffixes (), NULL, Qnil, 0, 0,
+	       NULL);
       if (fd < 0)
 	{
 	  Lisp_Object load_path_print = Fprin1_to_string (Vload_path,

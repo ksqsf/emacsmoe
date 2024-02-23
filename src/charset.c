@@ -1,6 +1,6 @@
 /* Basic character set support.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 
 Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
   2005, 2006, 2007, 2008, 2009, 2010, 2011
@@ -486,8 +486,9 @@ load_charset_map_from_file (struct charset *charset, Lisp_Object mapfile,
   specpdl_ref count = SPECPDL_INDEX ();
   record_unwind_protect_nothing ();
   specbind (Qfile_name_handler_alist, Qnil);
-  fd = openp (Vcharset_map_path, mapfile, suffixes, NULL, Qnil, false, false);
-  fp = fd < 0 ? 0 : fdopen (fd, "r");
+  fd = openp (Vcharset_map_path, mapfile, suffixes, NULL, Qnil, false, false,
+	      NULL);
+  fp = fd < 0 ? 0 : emacs_fdopen (fd, "r");
   if (!fp)
     {
       int open_errno = errno;
@@ -544,7 +545,7 @@ load_charset_map_from_file (struct charset *charset, Lisp_Object mapfile,
       entries->entry[idx].c = c;
       n_entries++;
     }
-  fclose (fp);
+  emacs_fclose (fp);
   clear_unwind_protect (count);
 
   load_charset_map (charset, head, n_entries, control_flag);
@@ -849,7 +850,6 @@ usage: (define-charset-internal ...)  */)
   /* Charset attr vector.  */
   Lisp_Object attrs;
   Lisp_Object val;
-  Lisp_Object hash_code;
   struct Lisp_Hash_Table *hash_table = XHASH_TABLE (Vcharset_hash_table);
   int i, j;
   struct charset charset;
@@ -1107,18 +1107,19 @@ usage: (define-charset-internal ...)  */)
   CHECK_LIST (args[charset_arg_plist]);
   ASET (attrs, charset_plist, args[charset_arg_plist]);
 
-  charset.hash_index = hash_lookup (hash_table, args[charset_arg_name],
-				    &hash_code);
-  if (charset.hash_index >= 0)
+  hash_hash_t hash_code;
+  ptrdiff_t hash_index
+    = hash_lookup_get_hash (hash_table, args[charset_arg_name],
+			    &hash_code);
+  if (hash_index >= 0)
     {
-      new_definition_p = 0;
+      new_definition_p = false;
       id = XFIXNAT (CHARSET_SYMBOL_ID (args[charset_arg_name]));
-      set_hash_value_slot (hash_table, charset.hash_index, attrs);
+      set_hash_value_slot (hash_table, hash_index, attrs);
     }
   else
     {
-      charset.hash_index = hash_put (hash_table, args[charset_arg_name], attrs,
-				     hash_code);
+      hash_put (hash_table, args[charset_arg_name], attrs, hash_code);
       if (charset_table_used == charset_table_size)
 	{
 	  /* Ensure that charset IDs fit into 'int' as well as into the
@@ -1149,6 +1150,7 @@ usage: (define-charset-internal ...)  */)
 
   ASET (attrs, charset_id, make_fixnum (id));
   charset.id = id;
+  charset.attributes = attrs;
   charset_table[id] = charset;
 
   if (charset.method == CHARSET_METHOD_MAP)
@@ -1789,7 +1791,7 @@ encode_char (struct charset *charset, int c)
       return CHARSET_INVALID_CODE (charset);
     }
 
-  if (! CHARSET_FAST_MAP_REF ((c), charset->fast_map)
+  if (! CHARSET_FAST_MAP_REF (c, charset->fast_map)
       || c < CHARSET_MIN_CHAR (charset) || c > CHARSET_MAX_CHAR (charset))
     return CHARSET_INVALID_CODE (charset);
 
@@ -2266,6 +2268,15 @@ See also `charset-priority-list' and `set-charset-priority'.  */)
     XSETCAR (tail, sort_data[i].charset);
   SAFE_FREE ();
   return charsets;
+}
+
+/* Not strictly necessary, because all charset attributes are also
+   reachable from `Vcharset_hash_table`.  */
+void
+mark_charset (void)
+{
+  for (int i = 0; i < charset_table_used; i++)
+    mark_object (charset_table[i].attributes);
 }
 
 

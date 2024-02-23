@@ -1,6 +1,6 @@
 ;;; less-css-mode.el --- Major mode for editing Less CSS files  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2011-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2024 Free Software Foundation, Inc.
 
 ;; Author: Steve Purcell <steve@sanityinc.com>
 ;; Maintainer: Simen Heggestøyl <simenheg@gmail.com>
@@ -215,7 +215,7 @@ directory by default."
 ;;;###autoload (add-to-list 'auto-mode-alist '("\\.less\\'" . less-css-mode))
 ;;;###autoload
 (define-derived-mode less-css-mode css-mode "Less"
-  "Major mode for editing Less files (http://lesscss.org/).
+  "Major mode for editing Less files (https://lesscss.org/).
 Special commands:
 \\{less-css-mode-map}"
   (font-lock-add-keywords nil less-css-font-lock-keywords)

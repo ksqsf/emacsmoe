@@ -1,6 +1,6 @@
 /* MS-DOS specific C utilities.          -*- coding: cp850 -*-
 
-Copyright (C) 1993-1997, 1999-2023 Free Software Foundation, Inc.
+Copyright (C) 1993-1997, 1999-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -979,10 +979,14 @@ tty_draw_row_with_mouse_face (struct window *w, struct glyph_row *row,
   if (hl == DRAW_MOUSE_FACE)
     {
       int vpos = row->y + WINDOW_TOP_EDGE_Y (w);
-      int kstart = start_hpos + WINDOW_LEFT_EDGE_X (w);
+      int kstart = (start_hpos + WINDOW_LEFT_EDGE_X (w)
+		    + row->used[LEFT_MARGIN_AREA]);
       int nglyphs = end_hpos - start_hpos;
       int offset = ScreenPrimary + 2*(vpos*screen_size_X + kstart) + 1;
       int start_offset = offset;
+
+      if (end_hpos >= row->used[TEXT_AREA])
+	nglyphs = row->used[TEXT_AREA] - start_hpos;
 
       if (tty->termscript)
 	fprintf (tty->termscript, "\n<MH+ %d-%d:%d>",
@@ -1021,6 +1025,9 @@ tty_draw_row_with_mouse_face (struct window *w, struct glyph_row *row,
 	 temporarily move cursor coordinates to the beginning of
 	 the highlight region.  */
       new_pos_X = start_hpos + WINDOW_LEFT_EDGE_X (w);
+      /* The coordinates supplied by the caller are relative to the
+	 text area, not the window itself.  */
+      new_pos_X += row->used[LEFT_MARGIN_AREA];
       new_pos_Y = row->y + WINDOW_TOP_EDGE_Y (w);
 
       if (tty->termscript)
@@ -2655,7 +2662,7 @@ dos_rawgetc (void)
 	      static Lisp_Object last_mouse_window;
 
 	      mouse_window = window_from_coordinates
-		(SELECTED_FRAME (), mouse_last_x, mouse_last_y, 0, 0, 0);
+		(SELECTED_FRAME (), mouse_last_x, mouse_last_y, 0, 0, 0, 0);
 	      /* A window will be selected only when it is not
 		 selected now, and the last mouse movement event was
 		 not in it.  A minibuffer window will be selected iff
@@ -2804,14 +2811,10 @@ IT_menu_make_room (XMenu *menu)
   else if (menu->allocated == menu->count)
     {
       int count = menu->allocated = menu->allocated + 10;
-      menu->text
-	= (char **) xrealloc (menu->text, count * sizeof (char *));
-      menu->submenu
-	= (XMenu **) xrealloc (menu->submenu, count * sizeof (XMenu *));
-      menu->panenumber
-	= (int *) xrealloc (menu->panenumber, count * sizeof (int));
-      menu->help_text
-	= (const char **) xrealloc (menu->help_text, count * sizeof (char *));
+      menu->text = xrealloc (menu->text, count * sizeof (char *));
+      menu->submenu = xrealloc (menu->submenu, count * sizeof (XMenu *));
+      menu->panenumber = xrealloc (menu->panenumber, count * sizeof (int));
+      menu->help_text = xrealloc (menu->help_text, count * sizeof (char *));
     }
 }
 
@@ -2862,7 +2865,7 @@ IT_menu_calc_size (XMenu *menu, int *width, int *height)
   do							   \
     {							   \
       (GLYPH).type = CHAR_GLYPH;			   \
-      SET_CHAR_GLYPH ((GLYPH), CODE, FACE_ID, PADDING_P);  \
+      SET_CHAR_GLYPH (GLYPH, CODE, FACE_ID, PADDING_P);	   \
       (GLYPH).charpos = -1;				   \
     }							   \
   while (0)

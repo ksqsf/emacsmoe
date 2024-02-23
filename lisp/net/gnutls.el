@@ -1,6 +1,6 @@
 ;;; gnutls.el --- Support SSL/TLS connections through GnuTLS  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2010-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2010-2024 Free Software Foundation, Inc.
 
 ;; Author: Ted Zlatanov <tzz@lifelogs.com>
 ;; Keywords: comm, tls, ssl, encryption
@@ -96,7 +96,7 @@ Security'."
           (repeat :tag "List of hostname regexps with flags for each"
            (list
             (choice :tag "Hostname"
-                    (const ".*" :tag "Any hostname")
+                    (const :tag "Any hostname" ".*")
                     regexp)
             (set (const :trustfiles)
                  (const :hostname))))))

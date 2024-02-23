@@ -1,6 +1,6 @@
 ;;; find-dired.el --- run a `find' command and dired the output  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2024 Free Software Foundation, Inc.
 
 ;; Author: Roland McGrath <roland@gnu.org>,
 ;;	   Sebastian Kremer <sk@thp.uni-koeln.de>
@@ -50,8 +50,13 @@ than the latter."
   :group 'find-dired
   :type 'string)
 
+(defvar find-gnu-find-p
+  (eq 0 (ignore-errors
+          (process-file find-program nil nil nil null-device "--version")))
+  "Non-nil if `find-program' is a GNU Find, nil otherwise.")
+
 (defvar find-ls-option-default-ls
-  (cons "-ls" (if (eq system-type 'berkeley-unix) "-gilsb" "-dilsb")))
+  (cons "-ls" (if find-gnu-find-p "-dilsb" "-dgils")))
 
 (defvar find-ls-option-default-exec
   (cons (format "-exec ls -ld {} %s" find-exec-terminator) "-ld"))
@@ -242,8 +247,8 @@ it finishes, type \\[kill-find]."
     (erase-buffer)
     (setq default-directory dir)
     ;; Start the find process.
-    (shell-command (concat command "&") (current-buffer))
-    (let ((proc (get-buffer-process (current-buffer))))
+    (let ((proc (start-file-process-shell-command
+                 (buffer-name) (current-buffer) command)))
       ;; Initialize the process marker; it is used by the filter.
       (move-marker (process-mark proc) (point) (current-buffer))
       (set-process-filter proc #'find-dired-filter)

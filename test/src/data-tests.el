@@ -1,6 +1,6 @@
 ;;; data-tests.el --- tests for src/data.c  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2013-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -767,6 +767,31 @@ comparing the subr with a much slower Lisp implementation."
     (should (equal (list last-coding-system-used
                          (default-value 'last-coding-system-used))
                    '(no-conversion bug34318)))))
+
+(defvar-local data-tests--bug65209 :default-value)
+
+(ert-deftest data-tests-make-local-bug65209 ()
+  (dolist (sym '(data-tests--bug65209   ;A normal always-local Lisp var.
+                 cursor-in-non-selected-windows)) ;Same but DEFVAR_PER_BUFFER.
+    ;; Note: For vars like `mode-name' that are *really* always buffer-local,
+    ;; this test isn't right because the `cl-progv' only binds the
+    ;; buffer-local value!
+    (let ((default (default-value sym))
+          vli vlo vgi vgo)
+      (with-temp-buffer
+        (cl-progv (list sym) '(:let-bound-value)
+          ;; While `setq' would not make the var buffer-local
+          ;; (because we'd be setq-ing the let-binding instead),
+          ;; `setq-local' definitely should.
+          (set (make-local-variable sym) :buffer-local-value)
+          (setq vgi (with-temp-buffer (symbol-value sym)))
+          (setq vli (symbol-value sym)))
+      (setq vgo (with-temp-buffer (symbol-value sym)))
+      (setq vlo (symbol-value sym)))
+      (should (equal (list vgo vgi vlo vli)
+                     (cons default
+                           '(:let-bound-value
+                             :buffer-local-value :buffer-local-value)))))))
 
 (ert-deftest data-tests-make_symbol_constant ()
   "Can't set variable marked with 'make_symbol_constant'."

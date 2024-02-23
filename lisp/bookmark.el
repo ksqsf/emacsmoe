@@ -1,6 +1,6 @@
 ;;; bookmark.el --- set bookmarks, maybe annotate them, jump to them later -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993-1997, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1993-1997, 2001-2024 Free Software Foundation, Inc.
 
 ;; Author: Karl Fogel <kfogel@red-bean.com>
 ;; Created: July, 1993
@@ -89,13 +89,15 @@ To specify the file in which to save them, modify the variable
   :type 'file)
 
 (defcustom bookmark-watch-bookmark-file t
-  "If non-nil watch the default bookmark file.
+  "If non-nil reload the default bookmark file if it was changed.
 If this file has changed on disk since it was last loaded, query the user
 whether to load it again.  If the value is `silent' reload without querying.
 This file defaults to `bookmark-default-file'.  But during an Emacs session,
 `bookmark-load' and `bookmark-save' can redefine the current default file."
   :version "27.1"
-  :type 'boolean
+  :type '(choice (const :tag "Suggest to reload bookmark file if changed" t)
+                 (const :tag "Silently reload bookmark file if changed" silent)
+                 (const :tag "Ignore changes of bookmark file" nil))
   :group 'bookmark)
 
 (defcustom bookmark-version-control 'nospecial
@@ -140,7 +142,7 @@ Nil means don't prompt for confirmation."
   "Non-nil means show annotations when jumping to a bookmark."
   :type 'boolean)
 
-(defconst bookmark-bmenu-buffer "*Bookmark List*"
+(defvar bookmark-bmenu-buffer "*Bookmark List*"
   "Name of buffer used for Bookmark List.")
 
 (defvar bookmark-bmenu-use-header-line t
@@ -509,6 +511,8 @@ BM is a bookmark as returned from function `bookmark-get-bookmark'.
 See user option `bookmark-fringe-mark'."
   (let ((filename (cdr (assq 'filename bm)))
         (pos (cdr (assq 'position bm)))
+        ;; Don't expand file names for non-existing remote connections.
+        (non-essential t)
         overlays found temp)
     (when (and pos filename)
       (setq filename (expand-file-name filename))
@@ -2419,7 +2423,7 @@ confirmation first."
 
 
 (defun bookmark-bmenu-locate ()
-  "Display location of this bookmark.  Displays in the minibuffer."
+  "Display the location of the bookmark for this line."
   (interactive nil bookmark-bmenu-mode)
   (let ((bmrk (bookmark-bmenu-bookmark)))
     (message "%s" (bookmark-location bmrk))))

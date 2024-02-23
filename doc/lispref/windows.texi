@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--1999, 2001--2023 Free Software
+@c Copyright (C) 1990--1995, 1998--1999, 2001--2024 Free Software
 @c Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Windows
@@ -2629,11 +2629,15 @@ default value is an empty display action, i.e., @w{@code{(nil . nil)}}.
 
 @defopt display-buffer-alist
 The value of this option is an alist mapping conditions to display
-actions.  Each condition is passed to @code{buffer-match-p}, along
-with the buffer name and the @var{action} argument passed to
-@code{display-buffer}.  If it returns a non-@code{nil} value, then
-@code{display-buffer} uses the corresponding display action to display
-the buffer.
+actions.  Each condition is passed to @code{buffer-match-p}
+(@pxref{Buffer List}), along with the buffer name and the @var{action}
+argument passed to @code{display-buffer}.  If it returns a
+non-@code{nil} value, then @code{display-buffer} uses the
+corresponding display action to display the buffer.  Caveat: if you
+use @code{derived-mode} or @code{major-mode} as condition,
+@code{buffer-match-p} could fail to report a match if
+@code{display-buffer} is called before the major mode of the buffer is
+set.
 @end defopt
 
 @defopt display-buffer-base-action
@@ -2847,8 +2851,8 @@ the left edge coordinate of the reference window.  Its left edge
 coordinate would equal the left edge coordinate of the frame's new
 root window.
 
-Four special values for @code{direction} entries allow to implicitly
-specify the selected frame's main window as the reference window:
+Four special values for @code{direction} entries allow implicitly
+specifying the selected frame's main window as the reference window:
 @code{leftmost}, @code{top}, @code{rightmost} and @code{bottom}.  This
 means that instead of, for example, @w{@code{(direction . left)
 (window . main)}} one can just specify @w{@code{(direction
@@ -3216,7 +3220,7 @@ any window it creates as dedicated to its buffer (@pxref{Dedicated
 Windows}).  It does that by calling @code{set-window-dedicated-p} with
 the chosen window as first argument and the entry's value as second.
 Side windows are by default dedicated with the value @code{side}
-((@pxref{Side Window Options and Functions}).
+(@pxref{Side Window Options and Functions}).
 
 @vindex preserve-size@r{, a buffer display action alist entry}
 @item preserve-size
@@ -3267,6 +3271,15 @@ displaying a buffer.
 The value specifies an alist of frame parameters to give a new frame,
 if one is created.  @code{display-buffer-pop-up-frame} is its one and
 only addressee.
+
+@vindex pop-up-frames@r{, a buffer display action alist entry}
+@item pop-up-frames
+The value controls whether @code{display-buffer} may display buffers
+by making new frames.  It has the same meaning as the
+@code{pop-up-frames} variable and takes precedence over it when present.
+Its main intended purpose is to override a non-nil value of the
+variable for particular buffers which the user prefers to keep
+in the selected frame.
 
 @vindex parent-frame@r{, a buffer display action alist entry}
 @item parent-frame
@@ -3331,6 +3344,16 @@ It is called @emph{after} the buffer is displayed, and @emph{before}
 the entries @code{window-height}, @code{window-width} and
 @code{preserve-size} are applied that could resize the window to fit
 it to the inserted contents.
+
+@vindex post-command-select-window@r{, a buffer display action alist entry}
+@item post-command-select-window
+If the value is non-@code{nil}, the buffer displayed by @code{display-buffer}
+is selected after the current command is executed by running the hook
+@code{post-command-hook} (@pxref{Command Overview}).
+If the value is @code{nil}, the buffer selected by such functions as
+@code{pop-to-buffer} is deselected, and the window that was selected
+before calling this function will remain selected regardless of which
+windows were selected afterwards within this command.
 @end table
 
 By convention, the entries @code{window-height}, @code{window-width}
@@ -3441,6 +3464,9 @@ A non-@code{nil} value also means that when @code{display-buffer} is
 looking for a window already displaying @var{buffer-or-name}, it can
 search any visible or iconified frame, not just the selected frame.
 
+An entry by the same name in @code{display-buffer}'s @var{alist}
+takes precedence over the variable.
+
 This variable is provided mainly for backward compatibility.  It is
 obeyed by @code{display-buffer} via a special mechanism in
 @code{display-buffer-fallback-action}, which calls the action function
@@ -3512,15 +3538,12 @@ functions it should try instead as, for example:
 
 @item pop-up-frames
 @vindex pop-up-frames@r{, replacement for}
-Instead of customizing this variable to @code{t}, customize
+Instead of customizing this variable to @code{t}, you can customize
 @code{display-buffer-base-action}, for example, as follows:
 
 @example
 @group
-(setopt
- display-buffer-base-action
- '((display-buffer-reuse-window display-buffer-pop-up-frame)
-   (reusable-frames . 0)))
+(setopt display-buffer-base-action '(nil (pop-up-frames . t)))
 @end group
 @end example
 
@@ -3759,7 +3782,7 @@ preferred way regardless of whether the display is also guided by an
 @code{display-buffer-alist} differs from customizing
 @code{display-buffer-base-action} in two major aspects: it is stronger
 because it overrides the @var{action} argument of
-@code{display-buffer}, and it allows to explicitly specify the
+@code{display-buffer}, and it enables you to explicitly specify the
 affected buffers.  In fact, displaying other buffers is not affected
 in any way by a customization for @file{*foo*}.  For example,
 
@@ -4596,7 +4619,7 @@ window and a number of side windows surrounding that main window.  The
 main window is either a ``normal'' live window or specifies the area
 containing all the normal windows.
 
-   In their most simple form of use, side windows allow to display
+   In their most simple form of use, side windows allow displaying
 specific buffers always in the same area of a frame.  Hence they can
 be regarded as a generalization of the concept provided by
 @code{display-buffer-at-bottom} (@pxref{Buffer Display Action
@@ -5569,7 +5592,7 @@ non-@code{nil}, this function may redraw the frame, according to the
 value of @code{recenter-redisplay}.  Thus, omitting the second
 argument can be used to countermand the effect of
 @code{recenter-redisplay} being non-@code{nil}.  Interactive calls
-pass non-‘nil’ for @var{redisplay}.
+pass non-@code{nil} for @var{redisplay}.
 
 When @code{recenter} is called interactively, @var{count} is the raw
 prefix argument.  Thus, typing @kbd{C-u} as the prefix sets the
@@ -6150,11 +6173,11 @@ up-to-date.
 @section Mouse Window Auto-selection
 @cindex window auto-selection
 @cindex auto-selection of window
-The following option allows to automatically select the window under the
-mouse pointer.  This accomplishes a policy similar to that of window
-managers that give focus to a frame (and thus trigger its subsequent
-selection) whenever the mouse pointer enters its window-system window
-(@pxref{Input Focus}).
+The following option enables automatically selecting the window under
+the mouse pointer.  This accomplishes a policy similar to that of
+window managers that give focus to a frame (and thus trigger its
+subsequent selection) whenever the mouse pointer enters its
+window-system window (@pxref{Input Focus}).
 
 @defopt mouse-autoselect-window
 If this variable is non-@code{nil}, Emacs will try to automatically
@@ -6188,7 +6211,7 @@ and never deselects the active minibuffer window.
 
 Mouse auto-selection can be used to emulate a focus follows mouse policy
 for child frames (@pxref{Child Frames}) which usually are not tracked by
-the window manager.  This requires to set the value of
+the window manager.  This requires setting the value of
 @code{focus-follows-mouse} (@pxref{Input Focus}) to a non-@code{nil}
 value.  If the value of @code{focus-follows-mouse} is @code{auto-raise},
 entering a child frame with the mouse will raise it automatically above
@@ -6341,7 +6364,7 @@ and/or two columns.
 @end defun
 
 The functions @code{window-state-get} and @code{window-state-put} also
-allow to exchange the contents of two live windows.  The following
+allow exchanging the contents of two live windows.  The following
 function does precisely that:
 
 @deffn Command window-swap-states &optional window-1 window-2 size

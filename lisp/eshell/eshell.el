@@ -1,6 +1,6 @@
 ;;; eshell.el --- the Emacs command shell  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2024 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 ;; Version: 2.4.2
@@ -272,43 +272,39 @@ information on Eshell, see Info node `(eshell)Top'."
 
 (declare-function eshell-add-input-to-history "em-hist" (input))
 
-;;;###autoload
-(defun eshell-command (&optional command arg)
-  "Execute the Eshell command string COMMAND.
-With prefix ARG, insert output into the current buffer at point."
-  (interactive)
-  (unless arg
-    (setq arg current-prefix-arg))
-  (let ((eshell-non-interactive-p t))
+(defun eshell-read-command (&optional prompt)
+  "Read an Eshell command from the minibuffer, prompting with PROMPT."
+  (let ((prompt (or prompt "Emacs shell command: "))
+        (eshell-non-interactive-p t))
     ;; Enable `eshell-mode' only in this minibuffer.
     (minibuffer-with-setup-hook (lambda ()
                                   (eshell-mode)
                                   (eshell-command-mode +1))
-      (unless command
-        (setq command (read-from-minibuffer "Emacs shell command: "))
-	(if (eshell-using-module 'eshell-hist)
-	    (eshell-add-input-to-history command)))))
-  (unless command
-    (error "No command specified!"))
-  ;; redirection into the current buffer is achieved by adding an
-  ;; output redirection to the end of the command, of the form
-  ;; 'COMMAND >>> #<buffer BUFFER>'.  This will not interfere with
-  ;; other redirections, since multiple redirections merely cause the
-  ;; output to be copied to multiple target locations
-  (if arg
-      (setq command
-	    (concat command
-		    (format " >>> #<buffer %s>"
-			    (buffer-name (current-buffer))))))
+      (let ((command (read-from-minibuffer prompt)))
+        (when (eshell-using-module 'eshell-hist)
+          (eshell-add-input-to-history command))
+        command))))
+
+;;;###autoload
+(defun eshell-command (command &optional to-current-buffer)
+  "Execute the Eshell command string COMMAND.
+If TO-CURRENT-BUFFER is non-nil (interactively, with the prefix
+argument), then insert output into the current buffer at point."
+  (interactive (list (eshell-read-command)
+                     current-prefix-arg))
   (save-excursion
-    (let ((buf (set-buffer (generate-new-buffer " *eshell cmd*")))
+    (let ((stdout (if to-current-buffer (current-buffer) t))
+          (buf (set-buffer (generate-new-buffer " *eshell cmd*")))
 	  (eshell-non-interactive-p t))
       (eshell-mode)
       (let* ((proc (eshell-eval-command
-		    (list 'eshell-commands
-			  (eshell-parse-command command))))
+                    `(let ((eshell-current-handles
+                            (eshell-create-handles ,stdout 'insert))
+                           (eshell-current-subjob-p))
+		       ,(eshell-parse-command command))
+                    command))
 	     intr
-	     (bufname (if (and proc (listp proc))
+	     (bufname (if (eq (car-safe proc) :eshell-background)
 			  "*Eshell Async Command Output*"
 			(setq intr t)
 			"*Eshell Command Output*")))
@@ -319,14 +315,13 @@ With prefix ARG, insert output into the current buffer at point."
 	;; make the output as attractive as possible, with no
 	;; extraneous newlines
 	(when intr
-	  (if (eshell-interactive-process-p)
-	      (eshell-wait-for-process (eshell-tail-process)))
-	  (cl-assert (not (eshell-interactive-process-p)))
+	  (apply #'eshell-wait-for-process (cadr eshell-foreground-command))
+	  (cl-assert (not eshell-foreground-command))
 	  (goto-char (point-max))
 	  (while (and (bolp) (not (bobp)))
 	    (delete-char -1)))
 	(cl-assert (and buf (buffer-live-p buf)))
-	(unless arg
+	(unless to-current-buffer
 	  (let ((len (if (not intr) 2
 		       (count-lines (point-min) (point-max)))))
 	    (cond
@@ -361,6 +356,7 @@ corresponding to a successful execution."
     (with-temp-buffer
       (let ((eshell-non-interactive-p t))
 	(eshell-mode)
+        (eshell-debug-command-start command)
 	(let ((result (eshell-do-eval
 		       (list 'eshell-commands
 			     (list 'eshell-command-to-value

@@ -1,6 +1,6 @@
 ;;; treesit-tests.el --- tests for src/treesit.c         -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -34,6 +34,7 @@
 (declare-function treesit-parser-buffer "treesit.c")
 (declare-function treesit-parser-language "treesit.c")
 
+(declare-function treesit-pattern-expand "treesit.c")
 (declare-function treesit-query-expand "treesit.c")
 (declare-function treesit-query-compile "treesit.c")
 (declare-function treesit-query-capture "treesit.c")
@@ -54,6 +55,9 @@
 (declare-function treesit-node-descendant-for-range "treesit.c")
 (declare-function treesit-node-eq "treesit.c")
 
+(declare-function treesit-search-forward "treesit.c")
+(declare-function treesit-search-subtree "treesit.c")
+
 ;;; Basic API
 
 (ert-deftest treesit-basic-parsing ()
@@ -66,7 +70,7 @@
       (should
        (equal (treesit-node-string
                (treesit-parser-root-node parser))
-              "(ERROR)"))
+              "(document)"))
 
       (insert "[1,2,3]")
       (should
@@ -162,6 +166,13 @@
       ;; `treesit-node-eq'.
       (should (treesit-node-eq root-node root-node))
       (should (not (treesit-node-eq root-node doc-node)))
+      ;; `treesit-node-enclosed-p'
+      (should (treesit-node-enclosed-p '(1 . 3) '(1 . 4)))
+      (should (treesit-node-enclosed-p '(1 . 3) '(1 . 3)))
+      (should (not (treesit-node-enclosed-p '(1 . 3) '(1 . 4) t)))
+      (should (treesit-node-enclosed-p '(1 . 3) '(1 . 4) 'partial))
+      (should (treesit-node-enclosed-p '(2 . 3) '(1 . 4) t))
+      (should (treesit-node-enclosed-p object-node root-node))
 
       ;; Further test for `treesit-node-check'.
       (treesit-parser-delete parser)
@@ -243,7 +254,7 @@
         (should (eq nil (treesit-node-text
                          (treesit-search-subtree
                           subarray "\\["))))
-        ;; If ALL=nil, searching for number should still find the
+        ;; If ALL=t, searching for number should still find the
         ;; numbers.
         (should (equal "1" (treesit-node-text
                             (treesit-search-subtree
@@ -257,6 +268,7 @@
 (defmacro treesit--ert-search-setup (&rest body)
   "Setup macro used by `treesit-search-forward' and friends.
 BODY is the test body."
+  (declare (debug (&rest form)))
   `(with-temp-buffer
      (let (parser root array)
        (progn
@@ -332,6 +344,59 @@ BODY is the test body."
             do (should (equal (treesit-node-text cursor)
                               text)))))
 
+(ert-deftest treesit-search-forward-predicate ()
+  "Test various form of supported predicates in search functions."
+  (skip-unless (treesit-language-available-p 'json))
+  (treesit--ert-search-setup
+   ;; The following tests are adapted from `treesit-search-forward'.
+
+   ;; Test `or'
+   (cl-loop for cursor = (treesit-node-child array 0)
+            then (treesit-search-forward cursor `(or "number" ,(rx "["))
+                                         nil t)
+            for text in '("[" "[" "1" "2" "3"
+                          "[" "4" "5" "6"
+                          "[" "7" "8" "9")
+            while cursor
+            do (should (equal (treesit-node-text cursor) text)))
+   ;; Test `not' and `or'
+   (cl-loop for cursor = (treesit-node-child array 0)
+            then (treesit-search-forward cursor
+                                         `(not (or "number" ,(rx "[")))
+                                         nil t)
+            for text in '("[" "," "," "]"
+                          "[1,2,3]" ","
+                          "," "," "]"
+                          "[4,5,6]" ","
+                          "," "," "]"
+                          "[7,8,9]" "]"
+                          "[[1,2,3], [4,5,6], [7,8,9]]")
+            while cursor
+            do (should (equal (treesit-node-text cursor) text)))
+   ;; Test (regexp . function)
+   (let ((is-odd (lambda (node)
+                   (let ((string (treesit-node-text node)))
+                     (and (eq 1 (length string))
+                          (cl-oddp (string-to-number string)))))))
+     (cl-loop for cursor = (treesit-node-child array 0)
+              then (treesit-search-forward cursor `("number" . ,is-odd)
+                                           nil t)
+              for text in '("[" "1" "3" "5" "7" "9")
+              while cursor
+              do (should (equal (treesit-node-text cursor) text))))))
+
+(ert-deftest treesit-search-forward-predicate-invalid-predicate ()
+  "Test tree-sitter's ability to detect invalid predicates."
+  (skip-unless (treesit-language-available-p 'json))
+  (treesit--ert-search-setup
+   (dolist (pred '( 1 (not 1) (not "2" "3") (or) (or 1) 'a))
+     (should-error (treesit-search-forward (treesit-node-child array 0)
+                                           pred)
+                   :type 'treesit-invalid-predicate))
+   (should-error (treesit-search-forward (treesit-node-child array 0)
+                                         (lambda (node) (car node)))
+                 :type 'wrong-type-argument)))
+
 (ert-deftest treesit-cursor-helper-with-missing-node ()
   "Test treesit_cursor_helper with a missing node."
   (skip-unless (treesit-language-available-p 'json))
@@ -368,14 +433,14 @@ BODY is the test body."
                ;; String query.
                '("(string) @string
 (pair key: (_) @keyword)
-((_) @bob (#match \"^B.b$\" @bob))
+((_) @bob (#match \"\\\\`B.b\\\\'\" @bob))
 (number) @number
 ((number) @n3 (#equal \"3\" @n3))
 ((number) @n3p (#pred treesit--ert-pred-last-sibling @n3p))"
                  ;; Sexp query.
                  ((string) @string
                   (pair key: (_) @keyword)
-                  ((_) @bob (:match "^B.b$" @bob))
+                  ((_) @bob (:match "\\`B.b\\'" @bob))
                   (number) @number
                   ((number) @n3 (:equal "3" @n3))
                   ((number) @n3p (:pred treesit--ert-pred-last-sibling
@@ -404,7 +469,12 @@ BODY is the test body."
         "(type field: (_) @capture .) ? * + \"return\""
         (treesit-query-expand
          '((type field: (_) @capture :anchor)
-           :? :* :+ "return")))))))
+           :? :* :+ "return"))))
+
+      ;; Test string conversion in `treesit-pattern-expand'.
+      (should (equal
+               (treesit-pattern-expand "a\nb\rc\td\0e\"f\1g\\h\fi")
+               "\"a\\nb\\rc\\td\\0e\\\"f\1g\\\\h\fi\"")))))
 
 ;;; Narrow
 
@@ -598,6 +668,20 @@ visible_end.)"
                        result)))
       ;; TODO: More tests.
       )))
+
+(ert-deftest treesit-range-offset ()
+  "Tests if range offsets work."
+  (skip-unless (treesit-language-available-p 'javascript))
+  (with-temp-buffer
+    (let ((query '(((call_expression (identifier) @_html_template_fn
+                                     (template_string) @capture)
+                    (:equal "html" @_html_template_fn)))))
+      (progn
+        (insert "const x = html`<p>Hello</p>`;")
+        (treesit-parser-create 'javascript))
+      (should (equal '((15 . 29)) (treesit-query-range 'javascript query)))
+      (should (equal '((16 . 28)) (treesit-query-range
+                                   'javascript query nil nil '(1 . -1)))))))
 
 ;;; Multiple language
 
@@ -831,7 +915,7 @@ the return value is ((1 3) (1 3))."
                                       (funcall fn)))))
 
 (defun treesit--ert-test-defun-navigation
-    (init program master &optional opening closing)
+    (init program master tactic &optional opening closing)
   "Run defun navigation tests on PROGRAM and MASTER.
 
 INIT is a setup function that runs right after this function
@@ -842,6 +926,8 @@ PROGRAM is a program source in string, MASTER is a list of
 starting marker position, and the rest are marker positions the
 corresponding navigation should stop at (after running
 `treesit-defun-skipper').
+
+TACTIC is the same as in `treesit--navigate-thing'.
 
 OPENING and CLOSING are the same as in
 `treesit--ert-insert-and-parse-marker', by default they are \"[\"
@@ -860,8 +946,6 @@ and \"]\"."
                    collect
                    (cl-loop for pos in record
                             collect (alist-get pos marker-alist))))
-         (`(,regexp . ,pred) (treesit--thing-unpack-pattern
-                              treesit-defun-type-regexp))
          ;; Collect positions each function returns.
          (positions
           (treesit--ert-collect-positions
@@ -873,7 +957,7 @@ and \"]\"."
                        (if-let ((pos (funcall
                                       #'treesit--navigate-thing
                                       (point) (car conf) (cdr conf)
-                                      regexp pred)))
+                                      treesit-defun-type-regexp tactic)))
                            (save-excursion
                              (goto-char pos)
                              (funcall treesit-defun-skipper)
@@ -1025,43 +1109,42 @@ the prev-beg, now point should be at marker 103\", etc.")
   "Test defun navigation."
   (skip-unless (treesit-language-available-p 'python))
   ;; Nested defun navigation
-  (let ((treesit-defun-tactic 'nested))
-    (require 'python)
-    (treesit--ert-test-defun-navigation
-     'python-ts-mode
-     treesit--ert-defun-navigation-python-program
-     treesit--ert-defun-navigation-nested-master)))
+  (require 'python)
+  (treesit--ert-test-defun-navigation
+   'python-ts-mode
+   treesit--ert-defun-navigation-python-program
+   treesit--ert-defun-navigation-nested-master
+   'nested))
 
 (ert-deftest treesit-defun-navigation-nested-2 ()
   "Test defun navigation using `js-ts-mode'."
   (skip-unless (treesit-language-available-p 'javascript))
   ;; Nested defun navigation
-  (let ((treesit-defun-tactic 'nested))
-    (require 'js)
-    (treesit--ert-test-defun-navigation
-     'js-ts-mode
-     treesit--ert-defun-navigation-js-program
-     treesit--ert-defun-navigation-nested-master)))
+  (require 'js)
+  (treesit--ert-test-defun-navigation
+   'js-ts-mode
+   treesit--ert-defun-navigation-js-program
+   treesit--ert-defun-navigation-nested-master
+   'nested))
 
 (ert-deftest treesit-defun-navigation-nested-3 ()
   "Test defun navigation using `bash-ts-mode'."
   (skip-unless (treesit-language-available-p 'bash))
   ;; Nested defun navigation
-  (let ((treesit-defun-tactic 'nested))
-    (treesit--ert-test-defun-navigation
-     (lambda ()
-       (treesit-parser-create 'bash)
-       (setq-local treesit-defun-type-regexp "function_definition"))
-     treesit--ert-defun-navigation-bash-program
-     treesit--ert-defun-navigation-nested-master)))
+  (treesit--ert-test-defun-navigation
+   (lambda ()
+     (treesit-parser-create 'bash)
+     (setq-local treesit-defun-type-regexp "function_definition"))
+   treesit--ert-defun-navigation-bash-program
+   treesit--ert-defun-navigation-nested-master
+   'nested))
 
 (ert-deftest treesit-defun-navigation-nested-4 ()
   "Test defun navigation using Elixir.
 This tests bug#60355."
   (skip-unless (treesit-language-available-p 'elixir))
   ;; Nested defun navigation
-  (let ((treesit-defun-tactic 'nested)
-        (pred (lambda (node)
+  (let ((pred (lambda (node)
                 (member (treesit-node-text
                          (treesit-node-child-by-field-name node "target"))
                         '("def" "defmodule")))))
@@ -1070,18 +1153,55 @@ This tests bug#60355."
        (treesit-parser-create 'elixir)
        (setq-local treesit-defun-type-regexp `("call" . ,pred)))
      treesit--ert-defun-navigation-elixir-program
-     treesit--ert-defun-navigation-nested-master)))
+     treesit--ert-defun-navigation-nested-master
+     'nested)))
 
 (ert-deftest treesit-defun-navigation-top-level ()
   "Test top-level only defun navigation."
   (skip-unless (treesit-language-available-p 'python))
   ;; Nested defun navigation
-  (let ((treesit-defun-tactic 'top-level))
-    (require 'python)
-    (treesit--ert-test-defun-navigation
-     'python-ts-mode
-     treesit--ert-defun-navigation-python-program
-     treesit--ert-defun-navigation-top-level-master)))
+  (require 'python)
+  (treesit--ert-test-defun-navigation
+   'python-ts-mode
+   treesit--ert-defun-navigation-python-program
+   treesit--ert-defun-navigation-top-level-master
+   'top-level))
+
+(ert-deftest treesit-search-subtree-forward-1 ()
+  "Test search subtree forward."
+  (skip-unless (treesit-language-available-p 'python))
+  (require 'python)
+  (python-ts-mode)
+  (insert "Temp(1, 2)")
+  (goto-char (point-min))
+  (pcase-let* ((`((,_ . ,call-node))
+                (treesit-query-capture (treesit-buffer-root-node)
+                                       '((call) @c)))
+               (node (treesit-search-subtree
+                      call-node
+                      (lambda (n) (equal (treesit-node-type n) "integer")))))
+
+    (should node)
+    (should (equal (treesit-node-text node) "1"))))
+
+(ert-deftest treesit-search-subtree-backward-1 ()
+  "Test search subtree with backward=t."
+  (skip-unless (treesit-language-available-p 'python))
+  (require 'python)
+  (python-ts-mode)
+  (insert "Temp(1, 2)")
+  (goto-char (point-min))
+  (pcase-let* ((`((,_ . ,call-node))
+                (treesit-query-capture (treesit-buffer-root-node)
+                                       '((call) @c)))
+               (node (treesit-search-subtree
+                      call-node
+                      (lambda (n) (equal (treesit-node-type n) "integer"))
+                      t)))
+
+    (should node)
+    (should (equal (treesit-node-text node) "2"))))
+
 
 ;; TODO
 ;; - Functions in treesit.el

@@ -1,5 +1,5 @@
 /* Coding system handler (conversion, detection, etc).
-   Copyright (C) 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 2001-2024 Free Software Foundation, Inc.
    Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
      2005, 2006, 2007, 2008, 2009, 2010, 2011
      National Institute of Advanced Industrial Science and Technology (AIST)
@@ -314,9 +314,9 @@ static Lisp_Object Vbig5_coding_system;
 /* ISO2022 section */
 
 #define CODING_ISO_INITIAL(coding, reg)			\
-  (XFIXNUM (AREF (AREF (CODING_ID_ATTRS ((coding)->id),	\
-		     coding_attr_iso_initial),		\
-	       reg)))
+  XFIXNUM (AREF (AREF (CODING_ID_ATTRS ((coding)->id),	\
+		       coding_attr_iso_initial),	\
+		 reg))
 
 
 #define CODING_ISO_REQUEST(coding, charset_id)		\
@@ -466,7 +466,7 @@ enum iso_code_class_type
 #define CODING_CCL_ENCODER(coding)	\
   AREF (CODING_ID_ATTRS ((coding)->id), coding_attr_ccl_encoder)
 #define CODING_CCL_VALIDS(coding)					   \
-  (SDATA (AREF (CODING_ID_ATTRS ((coding)->id), coding_attr_ccl_valids)))
+  SDATA (AREF (CODING_ID_ATTRS ((coding)->id), coding_attr_ccl_valids))
 
 /* Index for each coding category in `coding_categories' */
 
@@ -989,7 +989,7 @@ static void
 coding_alloc_by_realloc (struct coding_system *coding, ptrdiff_t bytes)
 {
   ptrdiff_t newbytes;
-  if (INT_ADD_WRAPV (coding->dst_bytes, bytes, &newbytes)
+  if (ckd_add (&newbytes, coding->dst_bytes, bytes)
       || SIZE_MAX < newbytes)
     string_overflow ();
   coding->destination = xrealloc (coding->destination, newbytes);
@@ -4198,12 +4198,12 @@ decode_coding_iso_2022 (struct coding_system *coding)
 #define ENCODE_ISO_CHARACTER(charset, c)				   \
   do {									   \
     unsigned code;							   \
-    CODING_ENCODE_CHAR (coding, dst, dst_end, (charset), (c), code);	   \
+    CODING_ENCODE_CHAR (coding, dst, dst_end, charset, c, code);	   \
 									   \
     if (CHARSET_DIMENSION (charset) == 1)				   \
-      ENCODE_ISO_CHARACTER_DIMENSION1 ((charset), code);		   \
+      ENCODE_ISO_CHARACTER_DIMENSION1 (charset, code);		   \
     else								   \
-      ENCODE_ISO_CHARACTER_DIMENSION2 ((charset), code >> 8, code & 0xFF); \
+      ENCODE_ISO_CHARACTER_DIMENSION2 (charset, code >> 8, code & 0xFF); \
   } while (0)
 
 
@@ -7059,9 +7059,8 @@ produce_chars (struct coding_system *coding, Lisp_Object translation_table,
 		{
 		  eassert (growable_destination (coding));
 		  ptrdiff_t dst_size;
-		  if (INT_MULTIPLY_WRAPV (to_nchars, MAX_MULTIBYTE_LENGTH,
-					  &dst_size)
-		      || INT_ADD_WRAPV (buf_end - buf, dst_size, &dst_size))
+		  if (ckd_mul (&dst_size, to_nchars, MAX_MULTIBYTE_LENGTH)
+		      || ckd_add (&dst_size, dst_size, buf_end - buf))
 		    memory_full (SIZE_MAX);
 		  dst = alloc_destination (coding, dst_size, dst);
 		  if (EQ (coding->src_object, coding->dst_object))
@@ -7659,8 +7658,7 @@ consume_chars (struct coding_system *coding, Lisp_Object translation_table,
 	  if (pos == stop_charset)
 	    buf = handle_charset_annotation (pos, end_pos, coding,
 					     buf, &stop_charset);
-	  stop = (stop_composition < stop_charset
-		  ? stop_composition : stop_charset);
+	  stop = min (stop_composition, stop_charset);
 	}
 
       if (! multibytep)
@@ -8171,7 +8169,7 @@ decode_coding_object (struct coding_system *coding,
 			     Fcons (undo_list, Fcurrent_buffer ()));
       bset_undo_list (current_buffer, Qt);
       TEMP_SET_PT_BOTH (coding->dst_pos, coding->dst_pos_byte);
-      val = safe_call1 (CODING_ATTR_POST_READ (attrs),
+      val = safe_calln (CODING_ATTR_POST_READ (attrs),
 			make_fixnum (coding->produced_char));
       CHECK_FIXNAT (val);
       coding->produced_char += Z - prev_Z;
@@ -8337,7 +8335,7 @@ encode_coding_object (struct coding_system *coding,
 	  set_buffer_internal (XBUFFER (coding->src_object));
 	}
 
-      safe_call2 (CODING_ATTR_PRE_WRITE (attrs),
+      safe_calln (CODING_ATTR_PRE_WRITE (attrs),
 		  make_fixnum (BEG), make_fixnum (Z));
       if (XBUFFER (coding->src_object) != current_buffer)
 	kill_src_buffer = 1;
@@ -8495,7 +8493,7 @@ preferred_coding_system (void)
   return CODING_ID_NAME (id);
 }
 
-#if defined (WINDOWSNT) || defined (CYGWIN)
+#if defined (WINDOWSNT) || defined (CYGWIN) || defined HAVE_ANDROID
 
 Lisp_Object
 from_unicode (Lisp_Object str)
@@ -8513,10 +8511,31 @@ from_unicode (Lisp_Object str)
 Lisp_Object
 from_unicode_buffer (const wchar_t *wstr)
 {
+#if defined WINDOWSNT || defined CYGWIN
   /* We get one of the two final null bytes for free.  */
   ptrdiff_t len = 1 + sizeof (wchar_t) * wcslen (wstr);
   AUTO_STRING_WITH_LEN (str, (char *) wstr, len);
   return from_unicode (str);
+#else
+  /* This code is used only on Android, where little endian UTF-16
+     strings are extended to 32-bit wchar_t.  */
+
+  uint16_t *words;
+  size_t length, i;
+
+  length = wcslen (wstr) + 1;
+
+  USE_SAFE_ALLOCA;
+  SAFE_NALLOCA (words, sizeof *words, length);
+
+  for (i = 0; i < length - 1; ++i)
+    words[i] = wstr[i];
+
+  words[i] = '\0';
+  AUTO_STRING_WITH_LEN (str, (char *) words,
+			(length - 1) * sizeof *words);
+  return unbind_to (sa_count, from_unicode (str));
+#endif
 }
 
 wchar_t *
@@ -8536,7 +8555,7 @@ to_unicode (Lisp_Object str, Lisp_Object *buf)
   return WCSDATA (*buf);
 }
 
-#endif /* WINDOWSNT || CYGWIN */
+#endif /* WINDOWSNT || CYGWIN || HAVE_ANDROID */
 
 
 /*** 8. Emacs Lisp library functions ***/
@@ -11453,7 +11472,18 @@ usage: (define-coding-system-internal ...)  */)
 
 DEFUN ("coding-system-put", Fcoding_system_put, Scoding_system_put,
        3, 3, 0,
-       doc: /* Change value in CODING-SYSTEM's property list PROP to VAL.  */)
+       doc: /* Change value of CODING-SYSTEM's property PROP to VAL.
+
+The following properties, if set by this function, override the values
+of the corresponding attributes set by `define-coding-system':
+
+  `:mnemonic', `:default-char', `:ascii-compatible-p'
+  `:decode-translation-table', `:encode-translation-table',
+  `:post-read-conversion', `:pre-write-conversion'
+
+See `define-coding-system' for the description of these properties.
+See `coding-system-get' and `coding-system-plist' for accessing the
+property list of a coding-system.  */)
   (Lisp_Object coding_system, Lisp_Object prop, Lisp_Object val)
 {
   Lisp_Object spec, attrs;
@@ -11735,7 +11765,7 @@ syms_of_coding (void)
   DEFSYM (Qutf_8_unix, "utf-8-unix");
   DEFSYM (Qutf_8_emacs, "utf-8-emacs");
 
-#if defined (WINDOWSNT) || defined (CYGWIN)
+#if defined (WINDOWSNT) || defined (CYGWIN) || defined HAVE_ANDROID
   /* No, not utf-16-le: that one has a BOM.  */
   DEFSYM (Qutf_16le, "utf-16le");
 #endif

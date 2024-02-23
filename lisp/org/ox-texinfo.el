@@ -1,9 +1,9 @@
 ;;; ox-texinfo.el --- Texinfo Back-End for Org Export Engine -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2012-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2024 Free Software Foundation, Inc.
 ;; Author: Jonathan Leech-Pepin <jonathan.leechpepin at gmail dot com>
 ;; Maintainer: Nicolas Goaziou <mail@nicolasgoaziou.fr>
-;; Keywords: outlines, hypermedia, calendar, wp
+;; Keywords: outlines, hypermedia, calendar, text
 
 ;; This file is part of GNU Emacs.
 
@@ -1965,9 +1965,6 @@ EXT-PLIST, when provided, is a property list with external
 parameters overriding Org default settings, but still inferior to
 file-local settings.
 
-When optional argument PUB-DIR is set, use it as the publishing
-directory.
-
 Return INFO file's name."
   (interactive)
   (let ((outfile (org-export-output-file-name ".texi" subtreep))
@@ -2037,10 +2034,13 @@ Once computed, the results remain cached."
                                    "\n")))
               (with-temp-file input-file
                 (insert input-content))
-              (let* ((output-file (org-texinfo-compile input-file))
-                     (output-content (with-temp-buffer
-                                       (insert-file-contents output-file)
-                                       (buffer-string))))
+              (when-let* ((output-file
+                           ;; If compilation fails, consider math to
+                           ;; be not supported.
+                           (ignore-errors (org-texinfo-compile input-file)))
+                          (output-content (with-temp-buffer
+                                            (insert-file-contents output-file)
+                                            (buffer-string))))
                 (let ((result (string-match-p (regexp-quote math-example)
                                               output-content)))
                   (delete-file input-file)

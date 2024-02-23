@@ -1,6 +1,6 @@
 ;;; em-glob.el --- extended file name globbing  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2024 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 
@@ -69,6 +69,15 @@ by zsh for filename generation."
   :type 'hook
   :group 'eshell-glob)
 
+(defcustom eshell-glob-splice-results nil
+  "If non-nil, the results of glob patterns will be spliced in-place.
+When splicing, the resulting command is as though the user typed
+each result individually.  Otherwise, the glob results a single
+argument as a list."
+  :version "30.1"
+  :type 'boolean
+  :group 'eshell-glob)
+
 (defcustom eshell-glob-include-dot-files nil
   "If non-nil, glob patterns will match files beginning with a dot."
   :type 'boolean
@@ -79,7 +88,7 @@ by zsh for filename generation."
   :type 'boolean
   :group 'eshell-glob)
 
-(defcustom eshell-glob-case-insensitive (eshell-under-windows-p)
+(defcustom eshell-glob-case-insensitive (not (not (eshell-under-windows-p)))
   "If non-nil, glob pattern matching will ignore case."
   :type 'boolean
   :group 'eshell-glob)
@@ -139,23 +148,16 @@ This mimics the behavior of zsh if non-nil, but bash if nil."
 (defun eshell-no-command-globbing (terms)
   "Don't glob the command argument.  Reflect this by modifying TERMS."
   (ignore
-   (when (and (listp (car terms))
-	      (eq (caar terms) 'eshell-extended-glob))
-     (setcar terms (cadr (car terms))))))
+   (pcase (car terms)
+     ((or `(eshell-extended-glob ,term)
+          `(eshell-splice-args (eshell-extended-glob ,term)))
+      (setcar terms term)))))
 
 (defun eshell-add-glob-modifier ()
   "Add `eshell-extended-glob' to the argument modifier list."
-  (when (memq 'expand-file-name eshell-current-modifiers)
-    (setq eshell-current-modifiers
-	  (delq 'expand-file-name eshell-current-modifiers))
-    ;; if this is a glob pattern than needs to be expanded, then it
-    ;; will need to expand each member of the resulting glob list
-    (add-to-list 'eshell-current-modifiers
-		 (lambda (list)
-                   (if (listp list)
-                       (mapcar 'expand-file-name list)
-                     (expand-file-name list)))))
-  (add-to-list 'eshell-current-modifiers 'eshell-extended-glob))
+  (when eshell-glob-splice-results
+    (add-hook 'eshell-current-modifiers #'eshell-splice-args 99))
+  (add-hook 'eshell-current-modifiers #'eshell-extended-glob))
 
 (defun eshell-parse-glob-chars ()
   "Parse a globbing delimiter.
@@ -336,7 +338,9 @@ regular expressions, and these cannot support the above constructs."
     (or (and eshell-glob-matches (sort eshell-glob-matches #'string<))
 	(if eshell-error-if-no-glob
 	    (error "No matches found: %s" glob)
-	  glob))))
+          (if eshell-glob-splice-results
+              (list glob)
+            glob)))))
 
 ;; FIXME does this really need to abuse eshell-glob-matches, message-shown?
 (defun eshell-glob-entries (path globs only-dirs)

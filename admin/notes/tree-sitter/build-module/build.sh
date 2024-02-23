@@ -31,10 +31,19 @@ case "${lang}" in
     "cmake")
         org="uyha"
         ;;
+    "elixir")
+        org="elixir-lang"
+        ;;
     "go-mod")
         # The parser is called "gomod".
         lang="gomod"
         org="camdencheek"
+        ;;
+    "heex")
+        org="phoenixframework"
+        ;;
+    "lua")
+        org="tree-sitter-grammars"
         ;;
     "typescript")
         sourcedir="tree-sitter-typescript/typescript/src"

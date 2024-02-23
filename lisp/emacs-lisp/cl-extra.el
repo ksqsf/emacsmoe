@@ -1,6 +1,6 @@
 ;;; cl-extra.el --- Common Lisp features, part 2  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993, 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1993, 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Dave Gillespie <daveg@synaptics.com>
 ;; Keywords: extensions
@@ -408,6 +408,7 @@ Other non-digit chars are considered junk.
 RADIX is an integer between 2 and 36, the default is 10.  Signal
 an error if the substring between START and END cannot be parsed
 as an integer unless JUNK-ALLOWED is non-nil."
+  (declare (side-effect-free t))
   (cl-check-type string string)
   (let* ((start (or start 0))
 	 (len	(length string))
@@ -440,7 +441,10 @@ as an integer unless JUNK-ALLOWED is non-nil."
 ;; Random numbers.
 
 (defun cl--random-time ()
-  (car (time-convert nil t)))
+    "Return high-precision timestamp from `time-convert'.
+
+For example, suitable for use as seed by `cl-make-random-state'."
+    (car (time-convert nil t)))
 
 ;;;###autoload (autoload 'cl-random-state-p "cl-extra")
 (cl-defstruct (cl--random-state
@@ -566,6 +570,7 @@ too large if positive or too small if negative)."
 ;;;###autoload
 (defun cl-revappend (x y)
   "Equivalent to (append (reverse X) Y)."
+  (declare (side-effect-free t))
   (nconc (reverse x) y))
 
 ;;;###autoload
@@ -633,13 +638,12 @@ PROPLIST is a list of the sort returned by `symbol-plist'.
     (and (cdr p) (progn (setcdr p (cdr (cdr (cdr p)))) t))))
 
 ;;;###autoload
-(defun cl-remprop (sym tag)
-  "Remove from SYMBOL's plist the property PROPNAME and its value.
-\n(fn SYMBOL PROPNAME)"
-  (let ((plist (symbol-plist sym)))
-    (if (and plist (eq tag (car plist)))
-	(progn (setplist sym (cdr (cdr plist))) t)
-      (cl--do-remf plist tag))))
+(defun cl-remprop (symbol propname)
+  "Remove from SYMBOL's plist the property PROPNAME and its value."
+  (let ((plist (symbol-plist symbol)))
+    (if (and plist (eq propname (car plist)))
+	(progn (setplist symbol (cdr (cdr plist))) t)
+      (cl--do-remf plist propname))))
 
 ;;; Streams.
 
@@ -733,7 +737,11 @@ PROPLIST is a list of the sort returned by `symbol-plist'.
 (declare-function help-fns-short-filename "help-fns" (filename))
 
 ;;;###autoload
-(defun cl-find-class (type) (cl--find-class type))
+(defun cl-find-class (type)
+    "Return CL class of TYPE.
+
+Call `cl--find-class' to get TYPE's propname `cl--class'"
+  (cl--find-class type))
 
 ;;;###autoload
 (defun cl-describe-type (type)
@@ -870,7 +878,7 @@ PROPLIST is a list of the sort returned by `symbol-plist'.
                       "%s")
               formats)
         (cl-incf col (+ col-space (aref cols i))))
-      (let ((format (mapconcat #'identity (nreverse formats) "")))
+      (let ((format (mapconcat #'identity (nreverse formats))))
         (insert (apply #'format format
                        (mapcar (lambda (str) (propertize str 'face 'italic))
                                header))

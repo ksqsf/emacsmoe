@@ -1,6 +1,6 @@
 ;;; easy-mmode.el --- easy definition for major and minor modes  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997, 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997, 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Georges Brun-Cottan <Georges.Brun-Cottan@inria.fr>
 ;; Maintainer: Stefan Monnier <monnier@gnu.org>
@@ -132,7 +132,7 @@ it is disabled.")
                         (string-replace "'" "\\='" (format "%S" getter)))))
           (let ((start (point)))
             (insert argdoc)
-            (when (fboundp 'fill-region)
+            (when (fboundp 'fill-region) ;Don't break bootstrap!
               (fill-region start (point) 'left t))))
         ;; Finally, insert the keymap.
         (when (and (boundp keymap-sym)
@@ -142,8 +142,6 @@ it is disabled.")
           (insert (format "\\{%s}" keymap-sym)))
         (buffer-string)))))
 
-;;;###autoload
-(defalias 'easy-mmode-define-minor-mode #'define-minor-mode)
 ;;;###autoload
 (defmacro define-minor-mode (mode doc &rest body)
   "Define a new minor mode MODE.
@@ -391,7 +389,7 @@ or call the function `%s'."))))
                                  (not (equal ,last-message
                                              (current-message))))
                       (let ((local ,(if globalp "" " in current buffer")))
-			(message ,(format "%s %%sabled%%s" pretty-name)
+			(message "%s %sabled%s" ,pretty-name
 			         (if ,getter "en" "dis") local)))))
 	      ,@(when after-hook `(,after-hook)))
 	    (force-mode-line-update)
@@ -443,8 +441,6 @@ No problems result if this variable is not bound.
 ;;;
 
 ;;;###autoload
-(defalias 'easy-mmode-define-global-mode #'define-globalized-minor-mode)
-;;;###autoload
 (defalias 'define-global-minor-mode #'define-globalized-minor-mode)
 ;;;###autoload
 (defmacro define-globalized-minor-mode (global-mode mode turn-on &rest body)
@@ -452,15 +448,26 @@ No problems result if this variable is not bound.
 TURN-ON is a function that will be called with no args in every buffer
 and that should try to turn MODE on if applicable for that buffer.
 
-Each of KEY VALUE is a pair of CL-style keyword arguments.  :predicate
-specifies which major modes the globalized minor mode should be switched on
-in.  As the minor mode defined by this function is always global, any
-:global keyword is ignored.  Other keywords have the same meaning as in
-`define-minor-mode', which see.  In particular, :group specifies the custom
-group.  The most useful keywords are those that are passed on to the
-`defcustom'.  It normally makes no sense to pass the :lighter or :keymap
-keywords to `define-globalized-minor-mode', since these are usually passed
-to the buffer-local version of the minor mode.
+Each of KEY VALUE is a pair of CL-style keyword arguments.
+The :predicate key specifies in which major modes should the
+globalized minor mode be switched on.  The value should be t (meaning
+switch on the minor mode in all major modes), nil (meaning don't
+switch on in any major mode), a list of modes (meaning switch on only
+in those modes and their descendants), or a list (not MODES...),
+meaning switch on in any major mode except MODES.  The value can also
+mix all of these forms, see the info node `Defining Minor Modes' for
+details.  The :predicate key causes the macro to create a user option
+named the same as MODE, but ending with \"-modes\" instead of \"-mode\".
+That user option can then be used to customize in which modes this
+globalized minor mode will be switched on.
+As the minor mode defined by this function is always global, any
+:global keyword is ignored.
+Other keywords have the same meaning as in `define-minor-mode',
+which see.  In particular, :group specifies the custom group.
+The most useful keywords are those that are passed on to the `defcustom'.
+It normally makes no sense to pass the :lighter or :keymap keywords
+to `define-globalized-minor-mode', since these are usually passed to
+the buffer-local version of the minor mode.
 
 BODY contains code to execute each time the mode is enabled or disabled.
 It is executed after toggling the mode, and before running
@@ -512,7 +519,7 @@ on if the hook has explicitly disabled it.
          (setq turn-on-function
                `(lambda ()
                   (require 'easy-mmode)
-                  (when (easy-mmode--globalized-predicate-p ,(car predicate))
+                  (when (easy-mmode--globalized-predicate-p ,MODE-predicate)
                     (funcall ,turn-on-function)))))
         (_ (push keyw extra-keywords) (push (pop body) extra-keywords))))
 
@@ -654,7 +661,7 @@ list."
           (throw 'found nil))
          ((and (consp elem)
                (eq (car elem) 'not))
-          (when (apply #'derived-mode-p (cdr elem))
+          (when (derived-mode-p (cdr elem))
             (throw 'found nil)))
          ((symbolp elem)
           (when (derived-mode-p elem)
@@ -829,6 +836,12 @@ Interactively, COUNT is the prefix numeric argument, and defaults to 1."
                 (user-error "No previous %s" ,name)))
            ,@body))
        (put ',prev-sym 'definition-name ',base))))
+
+;; When deleting these two, also delete them from loaddefs-gen.el.
+;;;###autoload
+(define-obsolete-function-alias 'easy-mmode-define-minor-mode #'define-minor-mode "30.1")
+;;;###autoload
+(define-obsolete-function-alias 'easy-mmode-define-global-mode #'define-globalized-minor-mode "30.1")
 
 (provide 'easy-mmode)
 

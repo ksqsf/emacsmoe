@@ -1,5 +1,5 @@
 /* ftcrfont.c -- FreeType font driver on cairo.
-   Copyright (C) 2015-2023 Free Software Foundation, Inc.
+   Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -681,7 +681,6 @@ ftcrfont_draw (struct glyph_string *s,
 			    GREEN_FROM_ULONG (col) / 255.0,
 			    BLUE_FROM_ULONG (col) / 255.0);
 #endif
-      s->background_filled_p = 1;
       cairo_rectangle (cr, x, y - FONT_BASE (s->font),
 		       s->width, FONT_HEIGHT (s->font));
       cairo_fill (cr);

@@ -1,6 +1,6 @@
 ;;; type-break.el --- encourage rests from typing at appropriate intervals  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1994-1995, 1997, 2000-2023 Free Software Foundation,
+;; Copyright (C) 1994-1995, 1997, 2000-2024 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Noah Friedman <friedman@splode.com>
@@ -77,7 +77,8 @@ rest from typing, then the next typing break is simply rescheduled for later.
 If a break is interrupted before this much time elapses, the user will be
 asked whether or not really to interrupt the break."
   :set-after '(type-break-interval)
-  :type 'natnum
+  :type '(choice (const :tag "Don't check idle time" nil)
+                 natnum)
   :group 'type-break)
 
 (defcustom type-break-good-break-interval nil
@@ -201,7 +202,8 @@ key is pressed."
   "Name of file used to save state across sessions.
 If this is nil, no data will be saved across sessions."
   :version "24.4"                       ; added locate-user
-  :type 'file)
+  :type '(choice (const :tag "Don't save data" nil)
+                 file))
 
 (defvar type-break-post-command-hook '(type-break-check)
   "Hook run indirectly by `post-command-hook' for typing break functions.
@@ -584,13 +586,13 @@ INTERVAL is the full length of an interval (defaults to TIME)."
   (type-break-check-post-command-hook)
   (type-break-cancel-schedule)
   (type-break-time-warning-schedule time 'reset)
-  (type-break-run-at-time (max 1 time) nil 'type-break-alarm)
+  (run-at-time (max 1 time) nil 'type-break-alarm)
   (setq type-break-time-next-break
         (type-break-time-sum start (or interval time))))
 
 (defun type-break-cancel-schedule ()
   (type-break-cancel-time-warning-schedule)
-  (type-break-cancel-function-timers 'type-break-alarm)
+  (cancel-function-timers 'type-break-alarm)
   (setq type-break-alarm-p nil)
   (setq type-break-time-next-break nil))
 
@@ -621,7 +623,7 @@ INTERVAL is the full length of an interval (defaults to TIME)."
 
       ;(let (type-break-current-time-warning-interval)
       ;  (type-break-cancel-time-warning-schedule))
-      (type-break-run-at-time (max 1 time) nil 'type-break-time-warning-alarm)
+      (run-at-time (max 1 time) nil 'type-break-time-warning-alarm)
 
       (cond
        (resetp
@@ -631,7 +633,7 @@ INTERVAL is the full length of an interval (defaults to TIME)."
         (setq type-break-warning-countdown-string-type "seconds"))))))))
 
 (defun type-break-cancel-time-warning-schedule ()
-  (type-break-cancel-function-timers 'type-break-time-warning-alarm)
+  (cancel-function-timers 'type-break-time-warning-alarm)
   (remove-hook 'type-break-post-command-hook 'type-break-time-warning)
   (setq type-break-current-time-warning-interval
         type-break-time-warning-intervals)
@@ -984,21 +986,6 @@ With optional non-nil ALL, force redisplay of all mode-lines."
   (add-hook 'post-command-hook 'type-break-run-tb-post-command-hook 'append))
 
 
-;;; Timer wrapper functions
-;;
-;; These shield type-break from variations in the interval timer packages
-;; for different versions of Emacs.
-
-(defun type-break-run-at-time (time repeat function)
-  (condition-case nil (or (require 'timer) (require 'itimer)) (error nil))
-  (run-at-time time repeat function))
-
-(defvar timer-dont-exit)
-(defun type-break-cancel-function-timers (function)
-  (let ((timer-dont-exit t))
-    (cancel-function-timers function)))
-
-
 ;;; Demo wrappers
 
 (defun type-break-catch-up-event ()
@@ -1144,6 +1131,8 @@ With optional non-nil ALL, force redisplay of all mode-lines."
             (kill-buffer buffer-name))))))
 
 (define-obsolete-function-alias 'timep 'type-break-timep "29.1")
+(define-obsolete-function-alias 'type-break-run-at-time #'run-at-time "30.1")
+(define-obsolete-function-alias 'type-break-cancel-function-timers #'cancel-function-timers "30.1")
 
 
 (provide 'type-break)

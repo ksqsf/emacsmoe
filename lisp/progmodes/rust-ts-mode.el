@@ -1,6 +1,6 @@
 ;;; rust-ts-mode.el --- tree-sitter support for Rust  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2024 Free Software Foundation, Inc.
 
 ;; Author     : Randy Taylor <dev@rjt.dev>
 ;; Maintainer : Randy Taylor <dev@rjt.dev>
@@ -48,6 +48,12 @@
   :safe 'integerp
   :group 'rust)
 
+(defvar rust-ts-mode-prettify-symbols-alist
+  '(("&&" . ?∧) ("||" . ?∨)
+    ("<=" . ?≤)  (">=" . ?≥) ("!=" . ?≠)
+    ("INFINITY" . ?∞) ("->" . ?→) ("=>" . ?⇒))
+  "Value for `prettify-symbols-alist' in `rust-ts-mode'.")
+
 (defvar rust-ts-mode--syntax-table
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?+   "."      table)
@@ -71,7 +77,7 @@
 
 (defvar rust-ts-mode--indent-rules
   `((rust
-     ((parent-is "source_file") point-min 0)
+     ((parent-is "source_file") column-0 0)
      ((node-is ")") parent-bol 0)
      ((node-is "]") parent-bol 0)
      ((node-is "}") (and parent parent-bol) 0)
@@ -91,6 +97,7 @@
      ((parent-is "let_declaration") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "macro_definition") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "parameters") parent-bol rust-ts-mode-indent-offset)
+     ((parent-is "struct_pattern") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "token_tree") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "use_list") parent-bol rust-ts-mode-indent-offset)))
   "Tree-sitter indent rules for `rust-ts-mode'.")
@@ -142,11 +149,11 @@
                               eol))
                       @font-lock-builtin-face)))
      ((identifier) @font-lock-type-face
-      (:match "^\\(:?Err\\|Ok\\|None\\|Some\\)$" @font-lock-type-face)))
+      (:match "\\`\\(?:Err\\|Ok\\|None\\|Some\\)\\'" @font-lock-type-face)))
 
    :language 'rust
    :feature 'comment
-   '(([(block_comment) (line_comment)]) @font-lock-comment-face)
+   '(([(block_comment) (line_comment)]) @rust-ts-mode--comment-docstring)
 
    :language 'rust
    :feature 'delimiter
@@ -211,11 +218,11 @@
      (scoped_use_list path: (scoped_identifier
                              name: (identifier) @font-lock-constant-face))
      ((use_as_clause alias: (identifier) @font-lock-type-face)
-      (:match "^[A-Z]" @font-lock-type-face))
+      (:match "\\`[A-Z]" @font-lock-type-face))
      ((use_as_clause path: (identifier) @font-lock-type-face)
-      (:match "^[A-Z]" @font-lock-type-face))
+      (:match "\\`[A-Z]" @font-lock-type-face))
      ((use_list (identifier) @font-lock-type-face)
-      (:match "^[A-Z]" @font-lock-type-face))
+      (:match "\\`[A-Z]" @font-lock-type-face))
      (use_wildcard [(identifier) @rust-ts-mode--fontify-scope
                     (scoped_identifier
                      name: (identifier) @rust-ts-mode--fontify-scope)])
@@ -231,10 +238,14 @@
      (type_identifier) @font-lock-type-face
      ((scoped_identifier name: (identifier) @rust-ts-mode--fontify-tail))
      ((scoped_identifier path: (identifier) @font-lock-type-face)
-      (:match
-       "^\\(u8\\|u16\\|u32\\|u64\\|u128\\|usize\\|i8\\|i16\\|i32\\|i64\\|i128\\|isize\\|char\\|str\\)$"
-       @font-lock-type-face))
+      (:match ,(rx bos
+                   (or "u8" "u16" "u32" "u64" "u128" "usize"
+                       "i8" "i16" "i32" "i64" "i128" "isize"
+                       "char" "str")
+                   eos)
+              @font-lock-type-face))
      ((scoped_identifier path: (identifier) @rust-ts-mode--fontify-scope))
+     ((scoped_type_identifier path: (identifier) @rust-ts-mode--fontify-scope))
      (type_identifier) @font-lock-type-face)
 
    :language 'rust
@@ -247,7 +258,7 @@
    :feature 'constant
    `((boolean_literal) @font-lock-constant-face
      ((identifier) @font-lock-constant-face
-      (:match "^[A-Z][A-Z\\d_]*$" @font-lock-constant-face)))
+      (:match "\\`[A-Z][0-9A-Z_]*\\'" @font-lock-constant-face)))
 
    :language 'rust
    :feature 'variable
@@ -281,6 +292,18 @@
    :override t
    '((ERROR) @font-lock-warning-face))
   "Tree-sitter font-lock settings for `rust-ts-mode'.")
+
+(defun rust-ts-mode--comment-docstring (node override start end &rest _args)
+  "Use the comment or documentation face appropriately for comments."
+  (let* ((beg (treesit-node-start node))
+         (face (save-excursion
+                 (goto-char beg)
+                 (if (looking-at-p
+                      "/\\(?:/\\(?:/[^/]\\|!\\)\\|\\*\\(?:\\*[^*/]\\|!\\)\\)")
+                     'font-lock-doc-face
+                   'font-lock-comment-face))))
+    (treesit-fontify-with-override beg (treesit-node-end node)
+                                   face override start end)))
 
 (defun rust-ts-mode--fontify-scope (node override start end &optional tail-p)
   (let* ((case-fold-search nil)
@@ -348,7 +371,12 @@ Return nil if there is no name or if NODE is not a defun node."
       (treesit-node-child-by-field-name node "name") t))))
 
 (defun rust-ts-mode--syntax-propertize (beg end)
-  "Apply syntax text property to template delimiters between BEG and END.
+  "Apply syntax properties to special characters between BEG and END.
+
+Apply syntax properties to various special characters with
+contextual meaning between BEG and END.
+
+The apostrophe \\=' should be treated as string when used for char literals.
 
 < and > are usually punctuation, e.g., as greater/less-than.  But
 when used for types, they should be considered pairs.
@@ -357,17 +385,37 @@ This function checks for < and > in the changed RANGES and apply
 appropriate text property to alter the syntax of template
 delimiters < and >'s."
   (goto-char beg)
+  (while (search-forward "'" end t)
+    (when (string-equal "char_literal"
+                        (treesit-node-type
+                         (treesit-node-at (match-beginning 0))))
+      (put-text-property (match-beginning 0) (match-end 0)
+                         'syntax-table (string-to-syntax "\""))))
+  (goto-char beg)
   (while (re-search-forward (rx (or "<" ">")) end t)
     (pcase (treesit-node-type
             (treesit-node-parent
              (treesit-node-at (match-beginning 0))))
-      ("type_arguments"
+      ((or "type_arguments" "type_parameters")
        (put-text-property (match-beginning 0)
                           (match-end 0)
                           'syntax-table
                           (pcase (char-before)
                             (?< '(4 . ?>))
                             (?> '(5 . ?<))))))))
+
+(defun rust-ts-mode--prettify-symbols-compose-p (start end match)
+  "Return true iff the symbol MATCH should be composed.
+See `prettify-symbols-compose-predicate'."
+  (and (fboundp 'prettify-symbols-default-compose-p)
+       (prettify-symbols-default-compose-p start end match)
+       ;; Make sure || is not a closure with 0 arguments and && is not
+       ;; a double reference.
+       (pcase match
+         ((or "||" "&&")
+          (string= (treesit-node-field-name (treesit-node-at (point)))
+                   "operator"))
+         (_ t))))
 
 ;;;###autoload
 (define-derived-mode rust-ts-mode prog-mode "Rust"
@@ -394,6 +442,11 @@ delimiters < and >'s."
                     number type)
                   ( bracket delimiter error function operator property variable)))
 
+    ;; Prettify configuration
+    (setq prettify-symbols-alist rust-ts-mode-prettify-symbols-alist)
+    (setq prettify-symbols-compose-predicate
+          #'rust-ts-mode--prettify-symbols-compose-p)
+
     ;; Imenu.
     (setq-local treesit-simple-imenu-settings
                 `(("Module" "\\`mod_item\\'" nil nil)
@@ -406,6 +459,10 @@ delimiters < and >'s."
     ;; Indent.
     (setq-local indent-tabs-mode nil
                 treesit-simple-indent-rules rust-ts-mode--indent-rules)
+
+    ;; Electric
+    (setq-local electric-indent-chars
+                (append "{}():;,#" electric-indent-chars))
 
     ;; Navigation.
     (setq-local treesit-defun-type-regexp

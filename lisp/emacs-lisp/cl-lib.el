@@ -1,6 +1,6 @@
 ;;; cl-lib.el --- Common Lisp extensions for Emacs  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1993, 2001-2024 Free Software Foundation, Inc.
 
 ;; Author: Dave Gillespie <daveg@synaptics.com>
 ;; Version: 1.0
@@ -157,6 +157,7 @@ to an element already in the list stored in PLACE.
     `(cl-callf2 cl-adjoin ,x ,place ,@keys)))
 
 (defun cl--set-buffer-substring (start end val)
+  "Delete region from START to END and insert VAL."
   (save-excursion (delete-region start end)
 		  (goto-char start)
 		  (insert val)
@@ -170,6 +171,17 @@ to an element already in the list stored in PLACE.
 	  val
 	  (and (< end (length str)) (substring str end))))
 
+(gv-define-expander substring
+  (lambda (do place from &optional to)
+    (gv-letplace (getter setter) place
+      (macroexp-let2* nil ((start from) (end to))
+        (funcall do `(substring ,getter ,start ,end)
+                 (lambda (v)
+                   (macroexp-let2 nil v v
+                     `(progn
+                        ,(funcall setter `(cl--set-substring
+                                           ,getter ,start ,end ,v))
+                        ,v))))))))
 
 ;;; Blocks and exits.
 
@@ -183,6 +195,8 @@ to an element already in the list stored in PLACE.
 ;; the target form to return the values as a list.
 
 (defun cl--defalias (cl-f el-f &optional doc)
+  "Define function CL-F as definition EL-F.
+Like `defalias' but marks the alias itself as inlinable."
   (defalias cl-f el-f doc)
   (put cl-f 'byte-optimizer 'byte-compile-inline-expand))
 
@@ -459,6 +473,7 @@ Thus, `(cl-list* A B C D)' is equivalent to `(nconc (list A B C) D)', or to
 (defun cl-copy-list (list)
   "Return a copy of LIST, which may be a dotted list.
 The elements of LIST are not copied, just the list structure itself."
+  (declare (side-effect-free error-free))
   (if (consp list)
       (let ((res nil))
 	(while (consp list) (push (pop list) res))
@@ -521,7 +536,12 @@ If ALIST is non-nil, the new pairs are prepended to it."
 (unless (load "cl-loaddefs" 'noerror 'quiet)
   ;; When bootstrapping, cl-loaddefs hasn't been built yet!
   (require 'cl-macs)
-  (require 'cl-seq))
+  (require 'cl-seq)
+  ;; FIXME: Arguably we should also load `cl-extra', except that this
+  ;; currently causes more bootstrap troubles, and `cl-extra' is
+  ;; rarely used, so instead we explicitly (require 'cl-extra) at
+  ;; those rare places where we do need it.
+  )
 
 (defun cl--old-struct-type-of (orig-fun object)
   (or (and (vectorp object) (> (length object) 0)
@@ -559,6 +579,7 @@ of record objects."
     (advice-add 'type-of :around #'cl--old-struct-type-of))
    (t
     (advice-remove 'type-of #'cl--old-struct-type-of))))
+(make-obsolete 'cl-old-struct-compat-mode nil "30.1")
 
 (defun cl-constantly (value)
   "Return a function that takes any number of arguments, but returns VALUE."

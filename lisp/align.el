@@ -1,6 +1,6 @@
 ;;; align.el --- align text to a specific column, by regexp -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2024 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 ;; Maintainer: emacs-devel@gnu.org
@@ -164,12 +164,14 @@ values may cause unexpected behavior at times."
   :group 'align)
 
 (defcustom align-highlight-change-face 'highlight
-  "The face to highlight with if changes are necessary."
+  "The face to highlight with if changes are necessary.
+Used by the `align-highlight-rule' command."
   :type 'face
   :group 'align)
 
 (defcustom align-highlight-nochange-face 'secondary-selection
-  "The face to highlight with if no changes are necessary."
+  "The face to highlight with if no changes are necessary.
+Used by the `align-highlight-rule' command."
   :type 'face
   :group 'align)
 
@@ -209,20 +211,20 @@ If nil, then no messages will ever be printed to the minibuffer."
 
 (defcustom align-dq-string-modes
   (append align-lisp-modes align-c++-modes align-perl-modes
-          '(python-mode vhdl-mode))
+          '(python-base-mode vhdl-mode))
   "A list of modes where double quoted strings should be excluded."
   :type '(repeat symbol)
   :group 'align)
 
 (defcustom align-sq-string-modes
-  (append align-perl-modes '(python-mode))
+  (append align-perl-modes '(python-base-mode))
   "A list of modes where single quoted strings should be excluded."
   :type '(repeat symbol)
   :group 'align)
 
 (defcustom align-open-comment-modes
   (append align-lisp-modes align-c++-modes align-perl-modes
-          '(python-mode makefile-mode vhdl-mode))
+          '(python-base-mode makefile-mode vhdl-mode))
   "A list of modes with a single-line comment syntax.
 These are comments as in Lisp, which have a beginning, but end with
 the line (i.e., `comment-end' is an empty string)."
@@ -448,7 +450,7 @@ The possible settings for `align-region-separate' are:
      (regexp   . ,(concat "[^=!<> \t\n]\\(\\s-*\\)="
 			  "\\(\\s-*\\)\\([^>= \t\n]\\|$\\)"))
      (group    . (1 2))
-     (modes    . '(python-mode))
+     (modes    . '(python-base-mode))
      (tab-stop . nil))
 
     (make-assignment
@@ -476,7 +478,7 @@ The possible settings for `align-region-separate' are:
     (basic-comma-delimiter
      (regexp   . ",\\(\\s-*\\)[^# \t\n]")
      (repeat   . t)
-     (modes    . (append align-perl-modes '(python-mode)))
+     (modes    . (append align-perl-modes '(python-base-mode)))
      (run-if   . ,(lambda () current-prefix-arg)))
 
     (c++-comment
@@ -506,7 +508,7 @@ The possible settings for `align-region-separate' are:
 
     (python-chain-logic
      (regexp   . "\\(\\s-*\\)\\(\\<and\\>\\|\\<or\\>\\)")
-     (modes    . '(python-mode))
+     (modes    . '(python-base-mode))
      (valid    . ,(lambda ()
                     (save-excursion
                       (goto-char (match-end 2))
@@ -523,7 +525,7 @@ The possible settings for `align-region-separate' are:
 
     (basic-line-continuation
      (regexp   . "\\(\\s-*\\)\\\\$")
-     (modes    . '(python-mode makefile-mode)))
+     (modes    . '(python-base-mode makefile-mode)))
 
     (tex-record-separator
      (regexp . ,(lambda (end reverse)
@@ -553,8 +555,7 @@ The possible settings for `align-region-separate' are:
      (repeat   . t)
      (run-if   . ,(lambda ()
                     (and (not (eq '- current-prefix-arg))
-                         (not (apply #'provided-mode-derived-p
-                                     major-mode align-tex-modes))))))
+                         (not (derived-mode-p align-tex-modes))))))
 
     ;; With a negative prefix argument, lists of dollar figures will
     ;; be aligned.
@@ -568,7 +569,25 @@ The possible settings for `align-region-separate' are:
     (css-declaration
      (regexp . "^\\s-*\\(?:\\w-?\\)+:\\(\\s-*\\).*;")
      (group . (1))
-     (modes . '(css-mode html-mode))))
+     (modes . '(css-base-mode html-mode)))
+
+    (toml-assignment
+     (regexp . ,(rx (group (zero-or-more (syntax whitespace)))
+                    "="
+                    (group (zero-or-more (syntax whitespace)))))
+     (group . (1 2))
+     (modes . '(conf-toml-mode toml-ts-mode lua-mode lua-ts-mode)))
+
+    (double-dash-comment
+     (regexp . ,(rx (group (zero-or-more (syntax whitespace)))
+                    "--"
+                    (zero-or-more nonl)))
+     (modes  . '(lua-mode lua-ts-mode))
+     (column . comment-column)
+     (valid  . ,(lambda ()
+                  (save-excursion
+                    (goto-char (match-beginning 1))
+                    (not (bolp)))))))
   "A list describing all of the available alignment rules.
 The format is:
 
@@ -1261,6 +1280,14 @@ Otherwise, create a new marker at position POS, with type TYPE."
        (move-marker ,marker-var ,pos)
      (setq ,marker-var (copy-marker ,pos ,type))))
 
+(defun align--rule-should-run (rule)
+  "Given an `align-rules-list' entry RULE, return t if it should run.
+This is decided by the `modes' and `run-if' keys in the alist
+RULE.  Their meaning is documented in `align-rules-list' (which see)."
+  (let-alist rule
+    (not (or (and .modes (not (derived-mode-p (eval .modes))))
+             (and .run-if (not (funcall .run-if)))))))
+
 (defun align-region (beg end separate rules exclude-rules
 			 &optional func)
   "Align a region based on a given set of alignment rules.
@@ -1298,23 +1325,20 @@ This feature (of passing a FUNC) is used internally to locate the
 position of exclusion areas, but could also be used for any other
 purpose where you might want to know where the regions that the
 aligner would have dealt with are."
-  (let ((end-mark (and end (copy-marker end t)))
-	(real-beg beg)
-	(report (and (not func) align-large-region beg end
-		     (>= (- end beg) align-large-region)))
-	(rule-index 1)
-	(rule-count (length rules))
-	markers)
+  (let* ((end-mark (and end (copy-marker end t)))
+	 (real-beg beg)
+	 (report (and (not func) align-large-region beg end
+		      (>= (- end beg) align-large-region)))
+         (rules (seq-filter #'align--rule-should-run rules))
+	 (rule-index 1)
+	 (rule-count (length rules))
+	 markers)
     (if (and align-indent-before-aligning real-beg end-mark)
 	(indent-region real-beg end-mark nil))
     (while rules
-      (let* ((rule (car rules))
-	     (run-if (assq 'run-if rule))
-	     (modes (assq 'modes rule)))
-	;; unless the `run-if' form tells us not to, look for the
-	;; rule..
-	(unless (or (and modes (not (apply #'derived-mode-p (eval (cdr modes)))))
-		    (and run-if (not (funcall (cdr run-if)))))
+      (let ((rule (car rules)))
+        (progn
+          ;; Search for a match for the rule.
 	  (let* ((case-fold-search case-fold-search)
 		 (case-fold (assq 'case-fold rule))
 		 (regexp  (cdr (assq 'regexp rule)))
@@ -1323,12 +1347,18 @@ aligner would have dealt with are."
 		 (thissep (if rulesep (cdr rulesep) separate))
 		 same (eol 0)
 		 search-start
-		 groups ;; group-c
-		 spacing spacing-c
-		 tab-stop tab-stop-c
-		 repeat repeat-c
-		 valid valid-c
-		 first
+                 (groups (ensure-list (or (cdr (assq 'group rule)) 1)))
+                 (spacing (cdr (assq 'spacing rule)))
+                 (tab-stop (let ((rule-ts (assq 'tab-stop rule)))
+                              (cond (rule-ts
+                                     (cdr rule-ts))
+                                    ((symbolp align-to-tab-stop)
+                                     (symbol-value align-to-tab-stop))
+                                    (t
+                                     align-to-tab-stop))))
+                 (repeat (cdr (assq 'repeat rule)))
+                 (valid (assq 'valid rule))
+                 (first (car groups))
 		 regions index
 		 last-point
 		 save-match-data
@@ -1445,44 +1475,11 @@ aligner would have dealt with are."
                     (if (and (bolp) (> (point) search-start))
                         (forward-char -1))
 
-                    ;; lookup the `group' attribute the first time
-                    ;; that we need it
-                    (unless nil ;; group-c
-                      (setq groups (or (cdr (assq 'group rule)) 1))
-                      (unless (listp groups)
-                        (setq groups (list groups)))
-                      (setq first (car groups)))
-
-                    (unless spacing-c
-                      (setq spacing (cdr (assq 'spacing rule))
-                            spacing-c t))
-
-                    (unless tab-stop-c
-                      (setq tab-stop
-                            (let ((rule-ts (assq 'tab-stop rule)))
-                              (cond (rule-ts
-                                     (cdr rule-ts))
-                                    ((symbolp align-to-tab-stop)
-                                     (symbol-value align-to-tab-stop))
-                                    (t
-                                     align-to-tab-stop)))
-                            tab-stop-c t))
-
                     ;; test whether we have found a match on the same
                     ;; line as a previous match
                     (when (> (point) eol)
                       (setq same nil)
                       (align--set-marker eol (line-end-position)))
-
-                    ;; lookup the `repeat' attribute the first time
-                    (or repeat-c
-                        (setq repeat (cdr (assq 'repeat rule))
-                              repeat-c t))
-
-                    ;; lookup the `valid' attribute the first time
-                    (or valid-c
-                        (setq valid (assq 'valid rule)
-                              valid-c t))
 
                     ;; remember the beginning position of this rule
                     ;; match, and save the match-data, since either
@@ -1585,7 +1582,7 @@ aligner would have dealt with are."
                         (if (= (point) search-start)
                             (forward-char)))))
 
-                  ;; when they are no more matches for this rule,
+                  ;; when there are no more matches for this rule,
                   ;; align whatever was left over
                   (if regions
                       (align-regions regions align-props rule func))))))))

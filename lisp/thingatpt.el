@@ -1,6 +1,6 @@
 ;;; thingatpt.el --- get the `thing' at point  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1991-1998, 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1991-1998, 2000-2024 Free Software Foundation, Inc.
 
 ;; Author: Mike Williams <mikew@gopher.dosli.govt.nz>
 ;; Maintainer: emacs-devel@gnu.org
@@ -52,7 +52,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (provide 'thingatpt)
 
 (defvar thing-at-point-provider-alist nil
@@ -175,11 +174,14 @@ See the file `thingatpt.el' for documentation on how to define
 a symbol as a valid THING."
   (let ((text
          (cond
-          ((cl-loop for (pthing . function) in thing-at-point-provider-alist
-                    when (eq pthing thing)
-                    for result = (funcall function)
-                    when result
-                    return result))
+          ((let ((alist thing-at-point-provider-alist)
+                 elt result)
+             (while (and alist (null result))
+               (setq elt (car alist)
+                     alist (cdr alist))
+               (and (eq (car elt) thing)
+                    (setq result (funcall (cdr elt)))))
+             result))
           ((get thing 'thing-at-point)
            (funcall (get thing 'thing-at-point)))
           (t
@@ -250,7 +252,8 @@ Prefer the enclosing string with fallback on sexp at point.
             (goto-char (nth 8 ppss))
             (cons (point) (progn (forward-sexp) (point))))
         ;; At the beginning of the string
-        (if (eq (char-syntax (char-after)) ?\")
+        (if (let ((ca (char-after)))
+              (and ca (eq (char-syntax ca) ?\")))
             (let ((bound (bounds-of-thing-at-point 'sexp)))
 	      (and bound
 	           (<= (car bound) (point)) (< (point) (cdr bound))
@@ -359,6 +362,10 @@ E.g.:
     (and (file-exists-p filename)
          filename)))
 
+(put 'existing-filename 'bounds-of-thing-at-point
+     (lambda ()
+       (and (thing-at-point 'existing-filename)
+            (bounds-of-thing-at-point 'filename))))
 (put 'existing-filename 'thing-at-point 'thing-at-point-file-at-point)
 
 ;; Faces
@@ -560,9 +567,9 @@ looks like an email address, \"ftp://\" if it starts with
 	 ;; If it looks like ftp.example.com. treat it as ftp.
 	 (if (string-match "\\`ftp\\." str)
 	     (setq str (concat "ftp://" str)))
-	 ;; If it looks like www.example.com. treat it as http.
+         ;; If it looks like www.example.com. treat it as https.
 	 (if (string-match "\\`www\\." str)
-	     (setq str (concat "http://" str)))
+             (setq str (concat "https://" str)))
 	 ;; Otherwise, it just isn't a URI.
 	 (setq str nil)))
       str)))
@@ -612,40 +619,24 @@ point.
 
 Optional argument DISTANCE limits search for REGEXP forward and
 back from point."
-  (save-excursion
-    (let ((old-point (point))
-	  (forward-bound (and distance (+ (point) distance)))
-	  (backward-bound (and distance (- (point) distance)))
-	  match prev-pos new-pos)
-      (and (looking-at regexp)
-	   (>= (match-end 0) old-point)
-	   (setq match (point)))
-      ;; Search back repeatedly from end of next match.
-      ;; This may fail if next match ends before this match does.
-      (re-search-forward regexp forward-bound 'limit)
-      (setq prev-pos (point))
-      (while (and (setq new-pos (re-search-backward regexp backward-bound t))
-                  ;; Avoid inflooping with some regexps, such as "^",
-                  ;; matching which never moves point.
-                  (< new-pos prev-pos)
-		  (or (> (match-beginning 0) old-point)
-		      (and (looking-at regexp)	; Extend match-end past search start
-			   (>= (match-end 0) old-point)
-			   (setq match (point))))))
-      (if (not match) nil
-	(goto-char match)
-	;; Back up a char at a time in case search skipped
-	;; intermediate match straddling search start pos.
-	(while (and (not (bobp))
-		    (progn (backward-char 1) (looking-at regexp))
-		    (>= (match-end 0) old-point)
-		    (setq match (point))))
-	(goto-char match)
-	(looking-at regexp)))))
+  (let* ((old (point))
+         (beg (if distance (max (point-min) (- old distance)) (point-min)))
+         (end (if distance (min (point-max) (+ old distance))))
+         prev match)
+    (save-excursion
+      (goto-char beg)
+      (while (and (setq prev (point)
+                        match (re-search-forward regexp end t))
+                  (< (match-end 0) old))
+        (goto-char (match-beginning 0))
+        ;; Avoid inflooping when `regexp' matches the empty string.
+        (unless (< prev (point)) (forward-char))))
+    (and match (<= (match-beginning 0) old (match-end 0)))))
+
 
 ;;   Email addresses
 (defvar thing-at-point-email-regexp
-  "<?[-+_.~a-zA-Z][-+_.~:a-zA-Z0-9]*@[-.a-zA-Z0-9]+>?"
+  "<?[-+_~a-zA-Z0-9/][-+_.~:a-zA-Z0-9/]*@[-a-zA-Z0-9]+[-.a-zA-Z0-9]*>?"
   "A regular expression probably matching an email address.
 This does not match the real name portion, only the address, optionally
 with angle brackets.")

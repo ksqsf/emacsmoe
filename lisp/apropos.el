@@ -1,6 +1,6 @@
 ;;; apropos.el --- apropos commands for users and programmers  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1989-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1989-2024 Free Software Foundation, Inc.
 
 ;; Author: Joe Wells <jbw@bigbird.bu.edu>
 ;;	Daniel Pfeiffer <occitan@esperanto.org> (rewrite)
@@ -899,7 +899,8 @@ Optional arg BUFFER (default: current buffer) is the buffer to check."
     ;; state of the `obarray' when we dumped, which we may also be able to
     ;; use in `bytecomp' to provide a clean initial environment?)
     (dolist (x load-history)
-      (when (string-match preloaded-regexp (car x))
+      (when (let ((elt (car x)))
+              (and (stringp elt) (string-match preloaded-regexp elt)))
         (dolist (def (cdr x))
           (cond
            ((symbolp def) (funcall f def))

@@ -1,6 +1,6 @@
 ;;; idlw-help.el --- HTML Help code for IDLWAVE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2000-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2000-2024 Free Software Foundation, Inc.
 ;;
 ;; Authors: JD Smith <jd.smith@utoledo.edu>
 ;;          Carsten Dominik <dominik@science.uva.nl>
@@ -1141,7 +1141,6 @@ When DING is non-nil, ring the bell as well."
 	  (goto-char pos)
 	  (recenter 0)))))
 
-(defvar font-lock-verbose)
 (defvar idlwave-mode-syntax-table)
 (defvar idlwave-font-lock-defaults)
 (defun idlwave-help-fontify ()

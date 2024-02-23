@@ -1,6 +1,6 @@
 ;;; japanese.el --- support for Japanese  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997, 2001-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997, 2001-2024 Free Software Foundation, Inc.
 ;; Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
 ;;   2005, 2006, 2007, 2008, 2009, 2010, 2011
 ;;   National Institute of Advanced Industrial Science and Technology (AIST)
@@ -208,6 +208,7 @@ eucJP-ms is defined in <http://www.opengroup.or.jp/jvc/cde/appendix.html>."
  "Japanese" '((setup-function . setup-japanese-environment-internal)
 	      (exit-function . use-default-char-width-table)
 	      (iso639-language . ja)
+              (cjk-locale-symbol . ja_JP)
 	      (tutorial . "TUTORIAL.ja")
 	      (charset japanese-jisx0208
 		       japanese-jisx0212 latin-jisx0201 katakana-jisx0201

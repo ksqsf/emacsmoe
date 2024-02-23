@@ -1,6 +1,6 @@
 ;;; yank-media.el --- Yanking images and HTML  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2021-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 ;; Author: Lars Ingebrigtsen <larsi@gnus.org>
 ;; Keywords: utility
@@ -81,7 +81,7 @@ all the different selection types."
    (gui-get-selection 'CLIPBOARD 'TARGETS)))
 
 (defun yank-media--get-selection (data-type)
-  (when-let ((data (gui-backend-get-selection 'CLIPBOARD data-type)))
+  (when-let ((data (gui-get-selection 'CLIPBOARD data-type)))
     (if (string-match-p "\\`text/" (symbol-name data-type))
         (yank-media-types--format data-type data)
       data)))

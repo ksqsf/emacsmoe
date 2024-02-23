@@ -1,6 +1,6 @@
 /* Buffer manipulation primitives for GNU Emacs.
 
-Copyright (C) 1985-2023 Free Software Foundation, Inc.
+Copyright (C) 1985-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -48,6 +48,14 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef WINDOWSNT
 #include "w32heap.h"		/* for mmap_* */
+#endif
+
+/* Work around GCC bug 109847
+   https://gcc.gnu.org/bugzilla/show_bug.cgi?id=109847
+   which causes GCC to mistakenly complain about
+   AUTO_STRING with "*scratch*".  */
+#if GNUC_PREREQ (13, 0, 0)
+# pragma GCC diagnostic ignored "-Wanalyzer-out-of-bounds"
 #endif
 
 /* This structure holds the default values of the buffer-local variables
@@ -200,11 +208,6 @@ static void
 bset_buffer_file_coding_system (struct buffer *b, Lisp_Object val)
 {
   b->buffer_file_coding_system_ = val;
-}
-static void
-bset_case_fold_search (struct buffer *b, Lisp_Object val)
-{
-  b->case_fold_search_ = val;
 }
 static void
 bset_ctl_arrow (struct buffer *b, Lisp_Object val)
@@ -511,8 +514,11 @@ See also `find-buffer-visiting'.  */)
   return Qnil;
 }
 
-Lisp_Object
-get_truename_buffer (register Lisp_Object filename)
+DEFUN ("get-truename-buffer", Fget_truename_buffer, Sget_truename_buffer, 1, 1, 0,
+       doc: /* Return the buffer with `file-truename' equal to FILENAME (a string).
+If there is no such live buffer, return nil.
+See also `find-buffer-visiting'.  */)
+  (register Lisp_Object filename)
 {
   register Lisp_Object tail, buf;
 
@@ -520,6 +526,22 @@ get_truename_buffer (register Lisp_Object filename)
     {
       if (!STRINGP (BVAR (XBUFFER (buf), file_truename))) continue;
       if (!NILP (Fstring_equal (BVAR (XBUFFER (buf), file_truename), filename)))
+	return buf;
+    }
+  return Qnil;
+}
+
+DEFUN ("find-buffer", Ffind_buffer, Sfind_buffer, 2, 2, 0,
+       doc: /* Return the buffer with buffer-local VARIABLE `equal' to VALUE.
+If there is no such live buffer, return nil.
+See also `find-buffer-visiting'.  */)
+  (Lisp_Object variable, Lisp_Object value)
+{
+  register Lisp_Object tail, buf;
+
+  FOR_EACH_LIVE_BUFFER (tail, buf)
+    {
+      if (!NILP (Fequal (value, Fbuffer_local_value (variable, buf))))
 	return buf;
     }
   return Qnil;
@@ -1307,7 +1329,7 @@ buffer_local_value (Lisp_Object variable, Lisp_Object buffer)
  start:
   switch (sym->u.s.redirect)
     {
-    case SYMBOL_VARALIAS: sym = indirect_variable (sym); goto start;
+    case SYMBOL_VARALIAS: sym = SYMBOL_ALIAS (sym); goto start;
     case SYMBOL_PLAINVAL: result = SYMBOL_VAL (sym); break;
     case SYMBOL_LOCALIZED:
       { /* Look in local_var_alist.  */
@@ -1731,7 +1753,7 @@ exists, return the buffer `*scratch*' (creating it if necessary).  */)
   if (!NILP (notsogood))
     return notsogood;
   else
-    return safe_call (1, Qget_scratch_buffer_create);
+    return safe_calln (Qget_scratch_buffer_create);
 }
 
 /* The following function is a safe variant of Fother_buffer: It doesn't
@@ -1752,7 +1774,7 @@ other_buffer_safely (Lisp_Object buffer)
      becoming dead under our feet.  safe_call below could return nil
      if recreating *scratch* in Lisp, which does some fancy stuff,
      signals an error in some weird use case.  */
-  buf = safe_call (1, Qget_scratch_buffer_create);
+  buf = safe_calln (Qget_scratch_buffer_create);
   if (NILP (buf))
     {
       AUTO_STRING (scratch, "*scratch*");
@@ -2386,6 +2408,7 @@ Any narrowing restriction in effect (see `narrow-to-region') is removed,
 so the buffer is truly empty after this.  */)
   (void)
 {
+  labeled_restrictions_remove_in_current_buffer ();
   Fwiden ();
 
   del_range (BEG, Z);
@@ -2979,7 +3002,7 @@ the normal hook `change-major-mode-hook'.  */)
    But still return the total number of overlays.
 */
 
-ptrdiff_t
+static ptrdiff_t
 overlays_in (ptrdiff_t beg, ptrdiff_t end, bool extend,
 	     Lisp_Object **vec_ptr, ptrdiff_t *len_ptr,
 	     bool empty, bool trailing,
@@ -3102,56 +3125,38 @@ mouse_face_overlay_overlaps (Lisp_Object overlay)
 {
   ptrdiff_t start = OVERLAY_START (overlay);
   ptrdiff_t end = OVERLAY_END (overlay);
-  ptrdiff_t n, i, size;
-  Lisp_Object *v, tem;
-  Lisp_Object vbuf[10];
-  USE_SAFE_ALLOCA;
+  Lisp_Object tem;
+  struct itree_node *node;
 
-  size = ARRAYELTS (vbuf);
-  v = vbuf;
-  n = overlays_in (start, end, 0, &v, &size, true, false, NULL);
-  if (n > size)
+  ITREE_FOREACH (node, current_buffer->overlays,
+                 start, min (end, ZV) + 1,
+                 ASCENDING)
     {
-      SAFE_NALLOCA (v, 1, n);
-      overlays_in (start, end, 0, &v, &n, true, false, NULL);
+      if (node->begin < end && node->end > start
+          && node->begin < node->end
+          && !EQ (node->data, overlay)
+          && (tem = Foverlay_get (overlay, Qmouse_face),
+	      !NILP (tem)))
+	return true;
     }
-
-  for (i = 0; i < n; ++i)
-    if (!EQ (v[i], overlay)
-	&& (tem = Foverlay_get (overlay, Qmouse_face),
-	    !NILP (tem)))
-      break;
-
-  SAFE_FREE ();
-  return i < n;
+  return false;
 }
 
 /* Return the value of the 'display-line-numbers-disable' property at
    EOB, if there's an overlay at ZV with a non-nil value of that property.  */
-Lisp_Object
+bool
 disable_line_numbers_overlay_at_eob (void)
 {
-  ptrdiff_t n, i, size;
-  Lisp_Object *v, tem = Qnil;
-  Lisp_Object vbuf[10];
-  USE_SAFE_ALLOCA;
+  Lisp_Object tem = Qnil;
+  struct itree_node *node;
 
-  size = ARRAYELTS (vbuf);
-  v = vbuf;
-  n = overlays_in (ZV, ZV, 0, &v, &size, false, false, NULL);
-  if (n > size)
+  ITREE_FOREACH (node, current_buffer->overlays, ZV, ZV, ASCENDING)
     {
-      SAFE_NALLOCA (v, 1, n);
-      overlays_in (ZV, ZV, 0, &v, &n, false, false, NULL);
+      if ((tem = Foverlay_get (node->data, Qdisplay_line_numbers_disable),
+	   !NILP (tem)))
+	return true;
     }
-
-  for (i = 0; i < n; ++i)
-    if ((tem = Foverlay_get (v[i], Qdisplay_line_numbers_disable),
-	 !NILP (tem)))
-      break;
-
-  SAFE_FREE ();
-  return tem;
+  return false;
 }
 
 
@@ -3334,7 +3339,7 @@ record_overlay_string (struct sortstrlist *ssl, Lisp_Object str,
   else
     nbytes = SBYTES (str);
 
-  if (INT_ADD_WRAPV (ssl->bytes, nbytes, &nbytes))
+  if (ckd_add (&nbytes, nbytes, ssl->bytes))
     memory_full (SIZE_MAX);
   ssl->bytes = nbytes;
 
@@ -3348,7 +3353,7 @@ record_overlay_string (struct sortstrlist *ssl, Lisp_Object str,
       else
 	nbytes = SBYTES (str2);
 
-      if (INT_ADD_WRAPV (ssl->bytes, nbytes, &nbytes))
+      if (ckd_add (&nbytes, nbytes, ssl->bytes))
 	memory_full (SIZE_MAX);
       ssl->bytes = nbytes;
     }
@@ -3420,7 +3425,7 @@ overlay_strings (ptrdiff_t pos, struct window *w, unsigned char **pstr)
       unsigned char *p;
       ptrdiff_t total;
 
-      if (INT_ADD_WRAPV (overlay_heads.bytes, overlay_tails.bytes, &total))
+      if (ckd_add (&total, overlay_heads.bytes, overlay_tails.bytes))
 	memory_full (SIZE_MAX);
       if (total > overlay_str_len)
 	overlay_str_buf = xpalloc (overlay_str_buf, &overlay_str_len,
@@ -4090,7 +4095,7 @@ report_overlay_modification (Lisp_Object start, Lisp_Object end, bool after,
 	    }
 	  /* Test for intersecting intervals.  This does the right thing
 	     for both insertion and deletion.  */
-	  if (! insertion || (end_arg > obegin && begin_arg < oend))
+	  if (end_arg > obegin && begin_arg < oend)
 	    {
 	      Lisp_Object prop = Foverlay_get (overlay, Qmodification_hooks);
 	      if (!NILP (prop))
@@ -4664,7 +4669,6 @@ init_buffer_once (void)
   XSETFASTINT (BVAR (&buffer_local_flags, mode_line_format), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, abbrev_mode), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, overwrite_mode), idx); ++idx;
-  XSETFASTINT (BVAR (&buffer_local_flags, case_fold_search), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, auto_fill_function), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, selective_display), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, selective_display_ellipses), idx); ++idx;
@@ -4710,6 +4714,7 @@ init_buffer_once (void)
 #ifdef HAVE_TREE_SITTER
   XSETFASTINT (BVAR (&buffer_local_flags, ts_parser_list), idx); ++idx;
 #endif
+  XSETFASTINT (BVAR (&buffer_local_flags, text_conversion_style), idx); ++idx;
   XSETFASTINT (BVAR (&buffer_local_flags, cursor_in_non_selected_windows), idx); ++idx;
 
   /* buffer_local_flags contains no pointers, so it's safe to treat it
@@ -4756,7 +4761,6 @@ init_buffer_once (void)
   bset_tab_line_format (&buffer_defaults, Qnil);
   bset_abbrev_mode (&buffer_defaults, Qnil);
   bset_overwrite_mode (&buffer_defaults, Qnil);
-  bset_case_fold_search (&buffer_defaults, Qt);
   bset_auto_fill_function (&buffer_defaults, Qnil);
   bset_selective_display (&buffer_defaults, Qnil);
   bset_selective_display_ellipses (&buffer_defaults, Qt);
@@ -4781,6 +4785,7 @@ init_buffer_once (void)
 #ifdef HAVE_TREE_SITTER
   bset_ts_parser_list (&buffer_defaults, Qnil);
 #endif
+  bset_text_conversion_style (&buffer_defaults, Qnil);
   bset_cursor_in_non_selected_windows (&buffer_defaults, Qt);
 
   bset_enable_multibyte_characters (&buffer_defaults, Qt);
@@ -5124,33 +5129,38 @@ A list whose car is an integer is processed by processing the cadr of
  negative) to the width specified by that number.
 
 A string is printed verbatim in the mode line except for %-constructs:
-  %b -- print buffer name.      %f -- print visited file name.
-  %F -- print frame name.
-  %* -- print %, * or hyphen.   %+ -- print *, % or hyphen.
-	%& is like %*, but ignore read-only-ness.
-	% means buffer is read-only and * means it is modified.
-	For a modified read-only buffer, %* gives % and %+ gives *.
-  %s -- print process status.   %l -- print the current line number.
+  %b -- print buffer name.
   %c -- print the current column number (this makes editing slower).
         Columns are numbered starting from the left margin, and the
         leftmost column is displayed as zero.
         To make the column number update correctly in all cases,
-	`column-number-mode' must be non-nil.
+        `column-number-mode' must be non-nil.
   %C -- Like %c, but the leftmost column is displayed as one.
+  %e -- print error message about full memory.
+  %f -- print visited file name.
+  %F -- print frame name.
   %i -- print the size of the buffer.
   %I -- like %i, but use k, M, G, etc., to abbreviate.
+  %l -- print the current line number.
+  %n -- print Narrow if appropriate.
+  %o -- print percent of window travel through buffer, or Top, Bot or All.
   %p -- print percent of buffer above top of window, or Top, Bot or All.
   %P -- print percent of buffer above bottom of window, perhaps plus Top,
         or print Bottom or All.
-  %n -- print Narrow if appropriate.
-  %t -- visited file is text or binary (if OS supports this distinction).
+  %q -- print percent of buffer above both the top and the bottom of the
+        window, separated by ‘-’, or ‘All’.
+  %s -- print process status.
   %z -- print mnemonics of keyboard, terminal, and buffer coding systems.
   %Z -- like %z, but including the end-of-line format.
-  %e -- print error message about full memory.
-  %@ -- print @ or hyphen.  @ means that default-directory is on a
-        remote machine.
-  %[ -- print one [ for each recursive editing level.  %] similar.
-  %% -- print %.   %- -- print infinitely many dashes.
+  %& -- print * if the buffer is modified, otherwise hyphen.
+  %+ -- print *, % or hyphen (modified, read-only, neither).
+  %* -- print %, * or hyphen (read-only, modified, neither).
+        For a modified read-only buffer, %+ prints * and %* prints %.
+  %@ -- print @ if default-directory is on a remote machine, else hyphen.
+  %[ -- print one [ for each recursive editing level.
+  %] -- print one ] for each recursive editing level.
+  %- -- print enough dashes to fill the mode line.
+  %% -- print %.
 Decimal digits after the % specify field width to which to pad.  */);
 
   DEFVAR_PER_BUFFER ("major-mode", &BVAR (current_buffer, major_mode),
@@ -5179,10 +5189,6 @@ Format with `format-mode-line' to produce a string value.  */);
   DEFVAR_PER_BUFFER ("abbrev-mode", &BVAR (current_buffer, abbrev_mode), Qnil,
 		     doc: /*  Non-nil if Abbrev mode is enabled.
 Use the command `abbrev-mode' to change this variable.  */);
-
-  DEFVAR_PER_BUFFER ("case-fold-search", &BVAR (current_buffer, case_fold_search),
-		     Qnil,
-		     doc: /* Non-nil if searches and matches should ignore case.  */);
 
   DEFVAR_PER_BUFFER ("fill-column", &BVAR (current_buffer, fill_column),
 		     Qintegerp,
@@ -5343,8 +5349,8 @@ visual lines rather than logical lines.  See the documentation of
 		     Qstringp,
 		     doc: /* Name of default directory of current buffer.
 It should be an absolute directory name; on GNU and Unix systems,
-these names start with `/' or `~' and end with `/'.
-To interactively change the default directory, use command `cd'. */);
+these names start with "/" or "~" and end with "/".
+To interactively change the default directory, use the command `cd'. */);
 
   DEFVAR_PER_BUFFER ("auto-fill-function", &BVAR (current_buffer, auto_fill_function),
 		     Qnil,
@@ -5852,6 +5858,26 @@ If t, displays a cursor related to the usual cursor type
 You can also specify the cursor type as in the `cursor-type' variable.
 Use Custom to set this variable and update the display.  */);
 
+  /* While this is defined here, each *term.c module must implement
+     the logic itself.  */
+
+  DEFVAR_PER_BUFFER ("text-conversion-style", &BVAR (current_buffer,
+						     text_conversion_style),
+		     Qnil,
+    doc: /* How the on screen keyboard's input method should insert in this buffer.
+When nil, the input method will be disabled and an ordinary keyboard
+will be displayed in its place.
+When the symbol `action', the input method will insert text directly, but
+will send `return' key events instead of inserting new line characters.
+Any other value means that the input method will insert text directly.
+
+If you need to make non-buffer local changes to this variable, use
+`overriding-text-conversion-style', which see.
+
+This variable does not take immediate effect when set; rather, it
+takes effect upon the next redisplay after the selected window or
+buffer changes.  */);
+
   DEFVAR_LISP ("kill-buffer-query-functions", Vkill_buffer_query_functions,
 	       doc: /* List of functions called with no args to query before killing a buffer.
 The buffer being killed will be current while the functions are running.
@@ -5895,6 +5921,12 @@ If `delete-auto-save-files' is nil, any autosave deletion is inhibited.  */);
 	       doc: /* Non-nil means delete auto-save file when a buffer is saved.
 This is the default.  If nil, auto-save file deletion is inhibited.  */);
   delete_auto_save_files = 1;
+
+  DEFVAR_LISP ("case-fold-search", Vcase_fold_search,
+	       doc: /* Non-nil if searches and matches should ignore case.  */);
+  Vcase_fold_search = Qt;
+  DEFSYM (Qcase_fold_search, "case-fold-search");
+  Fmake_variable_buffer_local (Qcase_fold_search);
 
   DEFVAR_LISP ("clone-indirect-buffer-hook", Vclone_indirect_buffer_hook,
 	       doc: /* Normal hook to run in the new buffer at the end of `make-indirect-buffer'.
@@ -5974,6 +6006,8 @@ There is no reason to change that value except for debugging purposes.  */);
   defsubr (&Sbuffer_list);
   defsubr (&Sget_buffer);
   defsubr (&Sget_file_buffer);
+  defsubr (&Sget_truename_buffer);
+  defsubr (&Sfind_buffer);
   defsubr (&Sget_buffer_create);
   defsubr (&Smake_indirect_buffer);
   defsubr (&Sgenerate_new_buffer_name);

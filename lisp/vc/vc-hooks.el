@@ -1,6 +1,6 @@
 ;;; vc-hooks.el --- resident support for version-control  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1992-1996, 1998-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1992-1996, 1998-2024 Free Software Foundation, Inc.
 
 ;; Author: FSF (see vc.el for full credits)
 ;; Maintainer: emacs-devel@gnu.org
@@ -87,6 +87,11 @@
   "Face for VC modeline state when the file is edited."
   :version "25.1")
 
+(defface vc-ignored-state
+  '((default :inherit vc-state-base))
+  "Face for VC modeline state when the file is registered, but ignored."
+  :version "30.1")
+
 ;; Customization Variables (the rest is in vc.el)
 
 (defcustom vc-ignore-dir-regexp
@@ -147,8 +152,12 @@ visited and a warning displayed."
 
 (defcustom vc-display-status t
   "If non-nil, display revision number and lock status in mode line.
-Otherwise, not displayed."
-  :type 'boolean
+If nil, only the backend name is displayed.  When the value
+is `no-backend', then no backend name is displayed before the
+revision number and lock status."
+  :type '(choice (const :tag "Show only revision/status" no-backend)
+                 (const :tag "Show backend and revision/status" t)
+                 (const :tag "Show only backend name" nil))
   :group 'vc)
 
 
@@ -176,7 +185,7 @@ Otherwise, not displayed."
   "Version Control minor mode.
 This minor mode is automatically activated whenever you visit a file under
 control of one of the revision control systems in `vc-handled-backends'.
-VC commands are globally reachable under the prefix `\\[vc-prefix-map]':
+VC commands are globally reachable under the prefix \\[vc-prefix-map]:
 \\{vc-prefix-map}")
 
 (defmacro vc-error-occurred (&rest body)
@@ -188,7 +197,7 @@ VC commands are globally reachable under the prefix `\\[vc-prefix-map]':
 ;; during any subsequent VC operations, and forget them when
 ;; the buffer is killed.
 
-(defvar vc-file-prop-obarray (make-vector 17 0)
+(defvar vc-file-prop-obarray (obarray-make 17)
   "Obarray for per-file properties.")
 
 (defvar vc-touched-properties nil)
@@ -321,8 +330,7 @@ backend is tried first."
      ((and (file-name-directory file)
            (string-match vc-ignore-dir-regexp (file-name-directory file)))
       nil)
-     ((and (boundp 'file-name-handler-alist)
-          (setq handler (find-file-name-handler file 'vc-registered)))
+     ((setq handler (find-file-name-handler file 'vc-registered))
       ;; handler should set vc-backend and return t if registered
       (funcall handler 'vc-registered file))
      (t
@@ -497,6 +505,18 @@ If FILE is not registered, this function always returns nil."
           (vc-file-setprop file 'vc-working-revision
                            (vc-call-backend
                             backend 'working-revision file))))))
+
+(defvar vc-use-short-revision nil
+  "If non-nil, VC backend functions should return short revisions if possible.
+This is set to t when calling `vc-short-revision', which will
+then call the \\=`working-revision' backend function.")
+
+(defun vc-short-revision (file &optional backend)
+  "Return the repository version for FILE in a shortened form.
+If FILE is not registered, this function always returns nil."
+  (let ((vc-use-short-revision t))
+    (vc-call-backend (or backend (vc-backend file))
+                     'working-revision file)))
 
 (defun vc-default-registered (backend file)
   "Check if FILE is registered in BACKEND using vc-BACKEND-master-templates."
@@ -701,6 +721,50 @@ If BACKEND is passed use it as the VC backend when computing the result."
   (force-mode-line-update)
   backend)
 
+(defun vc-mode-line-state (state)
+  "Return a list of data to display on the mode line.
+The argument STATE should contain the version control state returned
+from `vc-state'.  The returned list includes three elements: the echo
+string, the face name, and the indicator that usually is one character."
+  (let (state-echo face indicator)
+    (cond ((or (eq state 'up-to-date)
+               (eq state 'needs-update))
+           (setq state-echo "Up to date file")
+           (setq face 'vc-up-to-date-state)
+           (setq indicator "-"))
+          ((stringp state)
+           (setq state-echo (concat "File locked by" state))
+           (setq face 'vc-locked-state)
+           (setq indicator (concat ":" state ":")))
+          ((eq state 'added)
+           (setq state-echo "Locally added file")
+           (setq face 'vc-locally-added-state)
+           (setq indicator "@"))
+          ((eq state 'conflict)
+           (setq state-echo "File contains conflicts after the last merge")
+           (setq face 'vc-conflict-state)
+           (setq indicator "!"))
+          ((eq state 'removed)
+           (setq state-echo "File removed from the VC system")
+           (setq face 'vc-removed-state)
+           (setq indicator "!"))
+          ((eq state 'missing)
+           (setq state-echo "File tracked by the VC system, but missing from the file system")
+           (setq face 'vc-missing-state)
+           (setq indicator "?"))
+          ((eq state 'ignored)
+           (setq state-echo "File tracked by the VC system, but ignored")
+           (setq face 'vc-ignored-state)
+           (setq indicator "!"))
+          (t
+           ;; Not just for the 'edited state, but also a fallback
+           ;; for all other states.  Think about different symbols
+           ;; for 'needs-update and 'needs-merge.
+           (setq state-echo "Locally modified file")
+           (setq face 'vc-edited-state)
+           (setq indicator ":")))
+    (list state-echo face indicator)))
+
 (defun vc-default-mode-line-string (backend file)
   "Return a string for `vc-mode-line' to put in the mode line for FILE.
 Format:
@@ -713,47 +777,17 @@ Format:
   \"BACKEND?REV\"        if the file is under VC, but is missing
 
 This function assumes that the file is registered."
-  (let* ((backend-name (symbol-name backend))
-	 (state   (vc-state file backend))
-	 (state-echo nil)
-	 (face nil)
-	 (rev     (vc-working-revision file backend)))
-    (propertize
-     (cond ((or (eq state 'up-to-date)
-		(eq state 'needs-update))
-	    (setq state-echo "Up to date file")
-	    (setq face 'vc-up-to-date-state)
-	    (concat backend-name "-" rev))
-	   ((stringp state)
-	    (setq state-echo (concat "File locked by" state))
-	    (setq face 'vc-locked-state)
-	    (concat backend-name ":" state ":" rev))
-           ((eq state 'added)
-            (setq state-echo "Locally added file")
-	    (setq face 'vc-locally-added-state)
-            (concat backend-name "@" rev))
-           ((eq state 'conflict)
-            (setq state-echo "File contains conflicts after the last merge")
-	    (setq face 'vc-conflict-state)
-            (concat backend-name "!" rev))
-           ((eq state 'removed)
-            (setq state-echo "File removed from the VC system")
-	    (setq face 'vc-removed-state)
-            (concat backend-name "!" rev))
-           ((eq state 'missing)
-            (setq state-echo "File tracked by the VC system, but missing from the file system")
-	    (setq face 'vc-missing-state)
-            (concat backend-name "?" rev))
-	   (t
-	    ;; Not just for the 'edited state, but also a fallback
-	    ;; for all other states.  Think about different symbols
-	    ;; for 'needs-update and 'needs-merge.
-	    (setq state-echo "Locally modified file")
-	    (setq face 'vc-edited-state)
-	    (concat backend-name ":" rev)))
-     'face face
-     'help-echo (concat state-echo " under the " backend-name
-			" version control system"))))
+  (pcase-let* ((backend-name (symbol-name backend))
+               (state (vc-state file backend))
+               (rev (vc-working-revision file backend))
+               (`(,state-echo ,face ,indicator)
+                (vc-mode-line-state state))
+               (state-string (concat (unless (eq vc-display-status 'no-backend)
+                                       backend-name)
+                                     indicator rev)))
+    (propertize state-string 'face face 'help-echo
+                (concat state-echo " under the " backend-name
+                        " version control system"))))
 
 (defun vc-follow-link ()
   "If current buffer visits a symbolic link, visit the real file.
@@ -897,6 +931,15 @@ In the latter case, VC mode is deactivated for this buffer."
     (bindings--define-key map [vc-create-tag]
       '(menu-item "Create Tag" vc-create-tag
 		  :help "Create version tag"))
+    (bindings--define-key map [vc-print-branch-log]
+      '(menu-item "Show Branch History..." vc-print-branch-log
+		  :help "List the change log for another branch"))
+    (bindings--define-key map [vc-switch-branch]
+      '(menu-item "Switch Branch..." vc-switch-branch
+		  :help "Switch to another branch"))
+    (bindings--define-key map [vc-create-branch]
+      '(menu-item "Create Branch..." vc-create-branch
+		  :help "Make a new branch"))
     (bindings--define-key map [separator1] menu-bar-separator)
     (bindings--define-key map [vc-annotate]
       '(menu-item "Annotate" vc-annotate

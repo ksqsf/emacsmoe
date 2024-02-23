@@ -1,5 +1,5 @@
 /* Markers: examining, setting and deleting.
-   Copyright (C) 1985, 1997-1998, 2001-2023 Free Software Foundation,
+   Copyright (C) 1985, 1997-1998, 2001-2024 Free Software Foundation,
    Inc.
 
 This file is part of GNU Emacs.
@@ -20,9 +20,15 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <config.h>
 
+/* Work around GCC bug 113253.  */
+#if __GNUC__ == 13
+# pragma GCC diagnostic ignored "-Wanalyzer-deref-before-check"
+#endif
+
 #include "lisp.h"
 #include "character.h"
 #include "buffer.h"
+#include "window.h"
 
 /* Record one cached position found recently by
    buf_charpos_to_bytepos or buf_bytepos_to_charpos.  */
@@ -566,6 +572,31 @@ set_marker_internal (Lisp_Object marker, Lisp_Object position,
 
       attach_marker (m, b, charpos, bytepos);
     }
+
+#ifdef HAVE_TEXT_CONVERSION
+
+  /* If B is the buffer's mark and there is a window displaying B, and
+     text conversion is enabled while the mark is active, redisplay
+     the buffer.
+
+     propagate_window_redisplay will propagate this redisplay to the
+     window, which will eventually reach
+     mark_window_display_accurate_1.  At that point,
+     report_point_change will be told to update the mark as seen by
+     the input method.
+
+     This is done all the way in (the seemingly irrelevant) redisplay
+     because the selection reported to the input method is actually what
+     is visible on screen, namely w->last_point.  */
+
+  if (m->buffer
+      && EQ (marker, BVAR (m->buffer, mark))
+      && !NILP (BVAR (m->buffer, mark_active))
+      && buffer_window_count (m->buffer))
+    bset_redisplay (m->buffer);
+
+#endif
+
   return marker;
 }
 

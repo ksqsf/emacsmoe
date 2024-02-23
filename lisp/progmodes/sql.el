@@ -1,6 +1,6 @@
 ;;; sql.el --- specialized comint.el for SQL interpreters  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1998-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1998-2024 Free Software Foundation, Inc.
 
 ;; Author: Alex Schroeder <alex@gnu.org>
 ;; Maintainer: Michael Mauger <michael@mauger.com>
@@ -234,10 +234,6 @@
 (require 'thingatpt)
 (require 'view)
 (eval-when-compile (require 'subr-x))   ; string-empty-p
-
-(defvar font-lock-keyword-face)
-(defvar font-lock-set-defaults)
-(defvar font-lock-string-face)
 
 ;;; Allow customization
 
@@ -1191,12 +1187,11 @@ Starts `sql-interactive-mode' after doing some setup."
 
 (defcustom sql-postgres-options '("-P" "pager=off")
   "List of additional options for `sql-postgres-program'.
-The default setting includes the -P option which breaks older versions
-of the psql client (such as version 6.5.3).  The -P option is equivalent
-to the --pset option.  If you want the psql to prompt you for a user
-name, add the string \"-u\" to the list of options.  If you want to
-provide a user name on the command line (newer versions such as 7.1),
-add your name with a \"-U\" prefix (such as \"-Umark\") to the list."
+The default -P option is equivalent to the --pset option.  If you
+want psql to prompt you for a user name, add the string \"-u\" to
+the list of options.  If you want to provide a user name on the
+command line, add your name with a \"-U\" prefix (such as
+\"-Umark\") to the list."
   :type '(repeat string)
   :version "20.8")
 
@@ -2192,14 +2187,17 @@ to add functions and PL/SQL keywords.")
 
      ;; Postgres Data Types
      (sql-font-lock-keywords-builder 'font-lock-type-face nil
-"bigint" "bigserial" "bit" "bool" "boolean" "box" "bytea" "char"
-"character" "cidr" "circle" "date" "decimal" "double" "float4"
-"float8" "inet" "int" "int2" "int4" "int8" "integer" "interval" "line"
-"lseg" "macaddr" "money" "name" "numeric" "path" "point" "polygon"
-"precision" "real" "serial" "serial4" "serial8" "sequences" "smallint" "text"
-"time" "timestamp" "timestamptz" "timetz" "tsquery" "tsvector"
-"txid_snapshot" "unknown" "uuid" "varbit" "varchar" "varying" "without"
-"xml" "zone"
+ "bigint" "bigserial" "bit" "bool" "boolean" "box" "bytea" "char" "character"
+"cidr" "circle" "date" "daterange" "decimal" "double" "float4" "float8" "inet"
+"int" "int2" "int4" "int4range" "int8" "int8range" "integer" "interval"
+"jsonb" "jsonpath" "line" "lseg" "macaddr" "macaddr8" "money" "name" "numeric"
+"numrange" "oid" "path" "point" "polygon" "precision" "real" "regclass"
+"regcollation" "regconfig" "regdictionary" "regnamespace " "regoper"
+"regoperator" "regproc" "regprocedure" "regrole" "regtype" "sequences"
+"serial" "serial4" "serial8" "smallint" "smallserial" "text" "time"
+"timestamp" "timestamptz" "timetz" "tsquery" "tsrange" "tstzrange" "tsvector"
+"txid_snapshot" "unknown" "uuid" "varbit" "varchar" "varying" "without" "xml"
+"zone"
 )))
 
   "Postgres SQL keywords used by font-lock.
@@ -3093,9 +3091,7 @@ displayed."
 (defun sql-accumulate-and-indent ()
   "Continue SQL statement on the next line."
   (interactive)
-  (if (fboundp 'comint-accumulate)
-      (comint-accumulate)
-    (newline))
+  (comint-accumulate)
   (indent-according-to-mode))
 
 (defun sql-help-list-products (indent freep)
@@ -4030,7 +4026,7 @@ The list is maintained in SQL interactive buffers.")
 (defun sql--completion-table (string pred action)
   (when sql-completion-sqlbuf
     (with-current-buffer sql-completion-sqlbuf
-      (let ((schema (and (string-match "\\`\\(\\sw\\(:?\\sw\\|\\s_\\)*\\)[.]" string)
+      (let ((schema (and (string-match "\\`\\(\\sw\\(?:\\sw\\|\\s_\\)*\\)[.]" string)
                          (downcase (match-string 1 string)))))
 
         ;; If we haven't loaded any object name yet, load local schema
@@ -4197,7 +4193,7 @@ must tell Emacs.  Here's how to do that in your init file:
 
 (put 'sql-interactive-mode 'mode-class 'special)
 (put 'sql-interactive-mode 'custom-mode-group 'SQL)
-;; FIXME: Why not use `define-derived-mode'?
+
 (define-derived-mode sql-interactive-mode comint-mode "SQLi[?]"
   "Major mode to use a SQL interpreter interactively.
 

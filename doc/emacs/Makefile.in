@@ -1,6 +1,6 @@
 ### @configure_input@
 
-# Copyright (C) 1994, 1996-2023 Free Software Foundation, Inc.
+# Copyright (C) 1994, 1996-2024 Free Software Foundation, Inc.
 
 # This file is part of GNU Emacs.
 
@@ -146,6 +146,8 @@ EMACSSOURCES= \
 	${srcdir}/glossary.texi \
 	${srcdir}/ack.texi \
 	${srcdir}/kmacro.texi \
+	${srcdir}/android.texi \
+	${srcdir}/input.texi \
 	$(EMACS_XTRA)
 
 ## Disable implicit rules.

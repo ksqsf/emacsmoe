@@ -1,6 +1,6 @@
 ;;; calendar.el --- calendar functions  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1988-1995, 1997, 2000-2023 Free Software Foundation,
+;; Copyright (C) 1988-1995, 1997, 2000-2024 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Edward M. Reingold <reingold@cs.uiuc.edu>
@@ -1554,6 +1554,15 @@ first INDENT characters on the line."
       (when (window-live-p (get-buffer-window))
         (set-window-point (get-buffer-window) (point))))))
 
+(defun calendar-event-buffer (event)
+  "Return the Calendar buffer where EVENT happened.
+If EVENT's start falls within a window, use that window's buffer.
+Otherwise, use the selected window of EVENT's frame."
+  (let ((window-or-frame (posn-window (event-start event))))
+    (if (windowp window-or-frame)
+        (window-buffer window-or-frame)
+      (window-buffer (frame-selected-window window-or-frame)))))
+
 (defvar calendar-mode-map
   (let ((map (make-keymap)))
     (suppress-keymap map)
@@ -1916,10 +1925,13 @@ parameter ERROR is non-nil, otherwise just returns nil.
 If EVENT is non-nil, it's an event indicating the buffer position to
 use instead of point."
   (with-current-buffer
-      (if event (window-buffer (posn-window (event-start event)))
+      (if event (calendar-event-buffer event)
         (current-buffer))
     (save-excursion
       (and event (setq event (event-start event))
+           ;; (posn-point event) can be `menu-bar' if this command is
+           ;; invoked from the menu bar.
+           (integerp (posn-point event))
            (goto-char (posn-point event)))
       (let* ((segment (calendar-column-to-segment))
              (month (% (+ displayed-month (1- segment)) 12)))
@@ -2002,10 +2014,8 @@ handle dates in years BC."
 EVENT is an event like `last-nonmenu-event'."
   (interactive (let ((event (list last-nonmenu-event)))
                  (append (calendar-read-date 'noday) event)))
-  (save-selected-window
-    (and event
-         (setq event (event-start event))
-         (select-window (posn-window event)))
+  (with-current-buffer (or (and (not event) (current-buffer))
+                           (calendar-event-buffer event))
     (unless (and (= month displayed-month)
                  (= year displayed-year))
       (let ((old-date (calendar-cursor-to-date))
@@ -2327,10 +2337,12 @@ returned is (month year)."
          (defmon (aref month-array (1- (calendar-extract-month default-date))))
          (completion-ignore-case t)
          (month (cdr (assoc-string
-                      (completing-read
-                       (format-prompt "Month name" defmon)
-                       (append month-array nil)
-                       nil t nil nil defmon)
+                      (let ((completion-extra-properties
+                             '(:category calendar-month)))
+                        (completing-read
+                         (format-prompt "Month name" defmon)
+                         (append month-array nil)
+                         nil t nil nil defmon))
                       (calendar-make-alist month-array 1) t)))
          (defday (calendar-extract-day default-date))
          (last (calendar-last-day-of-month month year)))

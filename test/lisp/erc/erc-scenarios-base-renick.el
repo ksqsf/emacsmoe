@@ -1,6 +1,6 @@
 ;;; erc-scenarios-base-renick.el --- Re-nicking scenarios -*- lexical-binding: t -*-
 
-;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2024 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -173,7 +173,7 @@
       (with-current-buffer erc-server-buffer-foo
         (should (string= (buffer-name) (format "127.0.0.1:%d" port)))))
 
-    (erc-d-t-wait-for 1 (get-buffer "foonet"))
+    (erc-d-t-wait-for 10 (get-buffer "foonet"))
 
     (ert-info ("Joined by bouncer to #foo, pal persent")
       (with-current-buffer (erc-d-t-wait-for 1 (get-buffer "#foo"))
@@ -267,7 +267,7 @@
 
     (ert-info ("Sync convo for rando@foonet")
       (with-current-buffer "rando@foonet"
-        (funcall expect 1 "u are dumb")
+        (funcall expect 10 "u are dumb")
         (erc-scenarios-common-say "not so")))
 
     (ert-info ("Sync convo for rando@barnet")
@@ -275,18 +275,18 @@
         (funcall expect 3 "I never saw her before")
         (erc-scenarios-common-say "You aren't with Wage?")))
 
-    (erc-d-t-wait-for 3 (get-buffer "frenemy@foonet"))
-    (erc-d-t-wait-for 3 (get-buffer "frenemy@barnet"))
+    (erc-d-t-wait-for 10 (get-buffer "frenemy@foonet"))
+    (erc-d-t-wait-for 10 (get-buffer "frenemy@barnet"))
     (should-not (get-buffer "rando@foonet"))
     (should-not (get-buffer "rando@barnet"))
 
     (with-current-buffer "frenemy@foonet"
-      (funcall expect 1 "now known as")
-      (funcall expect 1 "doubly so"))
+      (funcall expect 10 "now known as")
+      (funcall expect 10 "doubly so"))
 
     (with-current-buffer "frenemy@barnet"
-      (funcall expect 1 "now known as")
-      (funcall expect 1 "reality picture"))
+      (funcall expect 10 "now known as")
+      (funcall expect 10 "reality picture"))
 
     (when noninteractive
       (with-current-buffer "frenemy@barnet" (kill-buffer))

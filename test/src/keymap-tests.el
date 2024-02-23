@@ -1,6 +1,6 @@
 ;;; keymap-tests.el --- Test suite for src/keymap.c -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 ;; Author: Juanma Barranquero <lekktu@gmail.com>
 ;;         Stefan Kangas <stefankangas@gmail.com>
@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 
 (defun keymap-tests--make-keymap-test (fun)
   (should (eq (car (funcall fun)) 'keymap))
@@ -470,10 +471,36 @@ g .. h		foo
        ert-keymap-duplicate
        "a" #'next-line
        "a" #'previous-line))
-  (should-error
-   (define-keymap
-       "a" #'next-line
-       "a" #'previous-line)))
+  (let ((msg ""))
+    ;; FIXME: It would be nicer to use `current-message' rather than override
+    ;; `message', but `current-message' returns always nil in batch mode :-(
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq msg (apply #'format fmt args)))))
+      (should
+       (string-match "duplicate"
+                     (progn
+                       (define-keymap
+                         "a" #'next-line
+                         "a" #'previous-line)
+                       msg))))))
+
+(ert-deftest keymap-unset-test-remove-and-inheritance ()
+  "Check various behaviors of keymap-unset.  (Bug#62207)"
+  (let ((map (make-sparse-keymap))
+        (parent (make-sparse-keymap)))
+    (set-keymap-parent map parent)
+    ;; Removing an unset key should not add a key.
+    (keymap-set parent "u" #'undo)
+    (keymap-unset map "u" t)
+    (should (equal (keymap-lookup map "u") #'undo))
+    ;; Non-removed child bindings should shadow parent
+    (keymap-set map "u" #'identity)
+    (keymap-unset map "u")
+    ;; From the child, but nil.
+    (should-not (keymap-lookup map "u"))
+    (keymap-unset map "u" t)
+    ;; From the parent this time/
+    (should (equal (keymap-lookup map "u") #'undo))))
 
 (provide 'keymap-tests)
 

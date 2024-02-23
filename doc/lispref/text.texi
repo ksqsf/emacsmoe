@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--2023 Free Software Foundation, Inc.
+@c Copyright (C) 1990--1995, 1998--2024 Free Software Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Text
 @chapter Text
@@ -551,14 +551,17 @@ character has close parenthesis syntax (@pxref{Blinking}).
 @vindex self-insert-uses-region-functions
 The final thing this command does is to run the hook
 @code{post-self-insert-hook}.  You could use this to automatically
-reindent text as it is typed, for example.  If any function on this
-hook needs to act on the region (@pxref{The Region}), it should make
-sure Delete Selection mode (@pxref{Using Region, Delete Selection, ,
-emacs, The GNU Emacs Manual}) doesn't delete the region before
-@code{post-self-insert-hook} functions are invoked.  The way to do so
-is to add a function that returns @code{nil} to
-@code{self-insert-uses-region-functions}, a special hook that tells
-Delete Selection mode it should not delete the region.
+reindent text as it is typed, for example.  The functions on this hook
+can use @code{last-command-event} (@pxref{Command Loop Info}) to
+access the character just inserted.
+
+If any function on this hook needs to act on the region (@pxref{The
+Region}), it should make sure Delete Selection mode (@pxref{Using
+Region, Delete Selection, , emacs, The GNU Emacs Manual}) doesn't
+delete the region before @code{post-self-insert-hook} functions are
+invoked.  The way to do so is to add a function that returns
+@code{nil} to @code{self-insert-uses-region-functions}, a special hook
+that tells Delete Selection mode it should not delete the region.
 
 Do not try substituting your own definition of
 @code{self-insert-command} for the standard one.  The editor command
@@ -2805,22 +2808,21 @@ indentation in the text.
 @deffn Command back-to-indentation
 @comment !!SourceFile simple.el
 This command moves point to the first non-whitespace character in the
-current line (which is the line in which point is located).  It returns
-@code{nil}.
+current line (which is the line in which point is located).
 @end deffn
 
 @deffn Command backward-to-indentation &optional arg
 @comment !!SourceFile simple.el
 This command moves point backward @var{arg} lines and then to the
-first nonblank character on that line.  It returns @code{nil}.
-If @var{arg} is omitted or @code{nil}, it defaults to 1.
+first nonblank character on that line.  If @var{arg} is omitted or
+@code{nil}, it defaults to 1.
 @end deffn
 
 @deffn Command forward-to-indentation &optional arg
 @comment !!SourceFile simple.el
 This command moves point forward @var{arg} lines and then to the first
-nonblank character on that line.  It returns @code{nil}.
-If @var{arg} is omitted or @code{nil}, it defaults to 1.
+nonblank character on that line.  If @var{arg} is omitted or
+@code{nil}, it defaults to 1.
 @end deffn
 
 @node Case Changes
@@ -2943,7 +2945,10 @@ character.
 
   Copying text between strings and buffers preserves the properties
 along with the characters; this includes such diverse functions as
-@code{substring}, @code{insert}, and @code{buffer-substring}.
+@code{substring}, @code{insert}, and @code{buffer-substring}.  Killing
+and then yanking text (@pxref{The Kill Ring}) also preserves the
+properties, except that some properties are handled specially and
+might be removed when text is yanked; @pxref{Yanking}.
 
 @menu
 * Examining Properties::   Looking at the properties of one character.
@@ -3398,37 +3403,43 @@ for @var{object} is the current buffer.
 @end defun
 
 @defun text-property-search-forward prop &optional value predicate not-current
-Search for the next region that has text property @var{prop} set to
-@var{value} according to @var{predicate}.
+Search for the next region of text whose property @var{prop} is a
+match for @var{value} (which defaults to @code{nil}), according to
+@var{predicate}.
 
-This function is modeled after @code{search-forward} and friends in
-that it moves point, but it returns a structure that describes the
-match instead of returning it in @code{match-beginning} and friends.
+This function is modeled after @code{search-forward} (@pxref{String
+Search}) and friends, in that it moves point, but it also returns a
+structure that describes the match instead of returning it in
+@code{match-beginning} and friends.
 
-If the text property can't be found, the function returns @code{nil}.
-If it's found, point is placed at the end of the region that has this
-text property match, and a @code{prop-match} structure is returned.
+If the text property whose value is a match can't be found, the
+function returns @code{nil}.  If it's found, point is placed at the
+end of the region that has this matching text property, and the
+function returns a @code{prop-match} structure with information about
+the match.
 
 @var{predicate} can either be @code{t} (which is a synonym for
 @code{equal}), @code{nil} (which means ``not equal''), or a predicate
-that will be called with two parameters: The first is @var{value}, and
-the second is the value of the text property we're inspecting.
+that will be called with two arguments: @var{value} and the value of
+the text property @var{prop} at the buffer position that is a
+candidate for a match.  The function should return non-@code{nil} if
+there's a match, @code{nil} otherwise.
 
-If @var{not-current}, if point is in a region where we have a match,
-then skip past that and find the next instance instead.
+If @var{not-current} is non-@code{nil}, then if point is already in a
+region where we have a property match, skip past that region and find
+the next region instead.
 
-The @code{prop-match} structure has the following accessors:
+The @code{prop-match} structure has the following accessor functions:
 @code{prop-match-beginning} (the start of the match),
 @code{prop-match-end} (the end of the match), and
 @code{prop-match-value} (the value of @var{property} at the start of
 the match).
 
-In the examples below, imagine that you're in a buffer that looks like
-this:
+In the examples below, we use a buffer whose contents is:
 
-@example
-This is a bold and here's bolditalic and this is the end.
-@end example
+@display
+This is a @b{bold} and here's @b{@i{bolditalic}} and this is the end.
+@end display
 
 That is, the ``bold'' words are the @code{bold} face, and the
 ``italic'' word is in the @code{italic} face.
@@ -3452,8 +3463,9 @@ This will pick out all the words that use the @code{bold} face.
 @end lisp
 
 This will pick out all the bits that have no face properties, which
-will result in the list @samp{("This is a " "and here's " "and this is
-the end")} (only reversed, since we used @code{push}).
+will result in the list @samp{(@w{"This is a "} @w{"and here's "}
+@w{"and this is the end"})} (only in reverse order, since we used
+@code{push}, @pxref{List Variables}).
 
 @lisp
 (while (setq match (text-property-search-forward 'face nil nil))
@@ -3481,8 +3493,8 @@ This will give you a list of all those URLs.
 
 @defun text-property-search-backward prop &optional value predicate not-current
 This is just like @code{text-property-search-forward}, but searches
-backward instead.  Point is placed at the beginning of the matched
-region instead of the end, though.
+backward instead, and if a match is found, point is placed at the
+beginning of the matched region instead of the end.
 @end defun
 
 
@@ -3765,18 +3777,19 @@ Consecutive characters with the same @code{field} property constitute a
 @item cursor
 @kindex cursor @r{(text property)}
 Normally, the cursor is displayed at the beginning or the end of any
-overlay and text property strings present at the current buffer
-position.  You can instead tell Emacs to place the cursor on any
-desired character of these strings by giving that character a
-non-@code{nil} @code{cursor} text property.  In addition, if the value
-of the @code{cursor} property is an integer, it specifies the number
-of buffer's character positions, starting with the position where the
-overlay or the @code{display} property begins, for which the cursor
-should be displayed on that character.  Specifically, if the value of
-the @code{cursor} property of a character is the number @var{n}, the
-cursor will be displayed on this character for any buffer position in
-the range @code{[@var{ovpos}..@var{ovpos}+@var{n})}, where @var{ovpos}
-is the overlay's starting position given by @code{overlay-start}
+overlay and text property strings that ``hide'' (i.e., are displayed
+instead of) the current buffer position.  You can instead tell Emacs
+to place the cursor on any desired character of these strings by
+giving that character a non-@code{nil} @code{cursor} text property.
+In addition, if the value of the @code{cursor} property is an integer,
+it specifies the number of buffer's character positions, starting with
+the position where the overlay or the @code{display} property begins,
+for which the cursor should be displayed on that character.
+Specifically, if the value of the @code{cursor} property of a
+character is the number @var{n}, the cursor will be displayed on this
+character for any buffer position in the range
+@code{[@var{ovpos}..@var{ovpos}+@var{n})}, where @var{ovpos} is the
+overlay's starting position given by @code{overlay-start}
 (@pxref{Managing Overlays}), or the position where the @code{display}
 text property begins in the buffer.
 
@@ -4641,20 +4654,25 @@ A rectangle is represented by a list of strings.
 This represents a window configuration to restore in one frame, and a
 position to jump to in the current buffer.
 
-@c FIXME: Mention frameset here.
+@cindex frameset
 @item @code{(@var{frame-configuration} @var{position})}
 This represents a frame configuration to restore, and a position
-to jump to in the current buffer.
+to jump to in the current buffer.  Frame configurations are also
+known as @dfn{framesets}.
 
-@item (file @var{filename})
+@item @code{(file @var{filename})}
 This represents a file to visit; jumping to this value visits file
 @var{filename}.
 
-@item (file-query @var{filename} @var{position})
+@item @code{(file-query @var{filename} @var{position})}
 This represents a file to visit and a position in it; jumping to this
 value visits file @var{filename} and goes to buffer position
 @var{position}.  Restoring this type of position asks the user for
 confirmation first.
+
+@item @code{(buffer @var{buffer-name})}
+This represents a buffer; jumping to this value switches to buffer
+@var{buffer-name}.
 @end table
 
   The functions in this section return unpredictable values unless
@@ -4763,9 +4781,9 @@ and exceeded, it will fall back to @code{delete-region} and
 the actual costs exceed this limit, heuristics are used to provide a
 faster but suboptimal solution.  The default value is 1000000.
 
-@code{replace-buffer-contents} returns t if a non-destructive
+@code{replace-buffer-contents} returns @code{t} if a non-destructive
 replacement could be performed.  Otherwise, i.e., if @var{max-secs}
-was exceeded, it returns nil.
+was exceeded, it returns @code{nil}.
 @end deffn
 
 @defun replace-region-contents beg end replace-fn &optional max-secs max-costs
@@ -5471,7 +5489,11 @@ made by the transaction.
 
 @defmac with-sqlite-transaction db body@dots{}
 Like @code{progn} (@pxref{Sequencing}), but executes @var{body} with a
-transaction held, and commits the transaction at the end.
+transaction held, and commits the transaction at the end if @var{body}
+completes normally.  If @var{body} signals an error, or committing the
+transaction fails, the changes in @var{db} performed by @var{body} are
+rolled back.  The macro returns the value of @var{body} if it
+completes normally and commit succeeds.
 @end defmac
 
 @defun sqlite-pragma db pragma
@@ -5509,7 +5531,7 @@ contents of an SQLite database.
 @section Parsing HTML and XML
 @cindex parsing html
 
-  Emacs can be compiled with built-in libxml2 support.
+  Emacs can be compiled with built-in @file{libxml2} support.
 
 @defun libxml-available-p
 This function returns non-@code{nil} if built-in libxml2 support is
@@ -5528,8 +5550,10 @@ mistakes.
 If @var{start} or @var{end} are @code{nil}, they default to the values
 from @code{point-min} and @code{point-max}, respectively.
 
-The optional argument @var{base-url}, if non-@code{nil}, should be a
-string specifying the base URL for relative URLs occurring in links.
+The optional argument @var{base-url}, if non-@code{nil}, should be
+used for warnings and errors reported by the @file{libxml2} library,
+but Emacs currently calls the library with errors and warnings
+disabled, so this argument is not used.
 
 If the optional argument @var{discard-comments} is non-@code{nil},
 any top-level comment is discarded.  (This argument is obsolete and
@@ -5898,74 +5922,109 @@ Nevertheless, we can define two distinct APIs around the
 @cindex JSONRPC application interfaces
 @enumerate
 
-@item A user interface for building JSONRPC applications
+@item An API for building JSONRPC applications
 
 @findex :request-dispatcher
 @findex :notification-dispatcher
 @findex jsonrpc-notify
 @findex jsonrpc-request
 @findex jsonrpc-async-request
-In this scenario, the JSONRPC application selects a concrete subclass
-of @code{jsonrpc-connection}, and proceeds to create objects of that
-subclass using @code{make-instance}.  To initiate a contact to the
-remote endpoint, the JSONRPC application passes this object to the
-functions @code{jsonrpc-notify}, @code{jsonrpc-request}, and/or
-@code{jsonrpc-async-request}.  For handling remotely initiated
-contacts, which generally come in asynchronously, the instantiation
-should include @code{:request-dispatcher} and
-@code{:notification-dispatcher} initargs, which are both functions of
-3 arguments: the connection object; a symbol naming the JSONRPC method
-invoked remotely; and a JSONRPC @code{params} object.
+In this scenario, a new aspiring JSONRPC-based application selects a
+concrete subclass of @code{jsonrpc-connection} that provides the
+transport for the JSONRPC messages to be exchanged between endpoints.
+
+The application creates objects of that subclass using
+@code{make-instance}.  To initiate a contact to a remote endpoint, the
+application passes this object to the functions such as
+@code{jsonrpc-notify}, @code{jsonrpc-request}, or
+@code{jsonrpc-async-request}.
+
+For handling remotely initiated contacts, which generally come in
+asynchronously, the @code{make-instance} instantiation should
+initialize it the @code{:request-dispatcher} and
+@code{:notification-dispatcher} EIEIO keyword arguments.  These are
+both functions of 3 arguments: the connection object; a symbol naming
+the JSONRPC method invoked remotely; and a JSONRPC @code{params}
+object.
 
 @findex jsonrpc-error
 The function passed as @code{:request-dispatcher} is responsible for
 handling the remote endpoint's requests, which expect a reply from the
-local endpoint (in this case, the program you're building).  Inside
-that function, you may either return locally (a normal return) or
-non-locally (an error return).  A local return value must be a Lisp
-object that can be serialized as JSON (@pxref{Parsing JSON}).  This
-determines a success response, and the object is forwarded to the
-server as the JSONRPC @code{result} object.  A non-local return,
-achieved by calling the function @code{jsonrpc-error}, causes an error
-response to be sent to the server.  The details of the accompanying
-JSONRPC @code{error} are filled out with whatever was passed to
+local endpoint (in this case, the application you're building).
+Inside that function, you may either return locally (a regular return)
+or non-locally (throw an error).  Both exits from the request
+dispatcher cause a reply to the remote endpoint's request to be sent
+through the transport.
+
+A regular return determines a success response, and the return value
+must be a Lisp object that can be serialized as JSON (@pxref{Parsing
+JSON}).  The result is forwarded to the server as the JSONRPC
+@code{result} object.  A non-local return, achieved by calling the
+function @code{jsonrpc-error}, causes an error response to be sent to
+the server.  The details of the accompanying JSONRPC @code{error}
+object are filled out with whatever was passed to
 @code{jsonrpc-error}.  A non-local return triggered by an unexpected
 error of any other type also causes an error response to be sent
 (unless you have set @code{debug-on-error}, in which case this calls
 the Lisp debugger, @pxref{Error Debugging}).
 
-@item A inheritance interface for building JSONRPC transport implementations
+@findex jsonrpc-convert-to-endpoint
+@findex jsonrpc-convert-from-endpoint
+It's possible to use the @code{jsonrpc} library to build applications
+based on transport protocols that can be described as
+``quasi-JSONRPC''.  These are similar, but not quite identical to
+JSONRPC, such as the @uref{https://www.jsonrpc.org/, DAP (Debug
+Adapter Protocol)}.  These protocols also define request, response and
+notification messages but the format is not quite the same as JSONRPC.
+The generic functions @code{jsonrpc-convert-to-endpoint} and
+@code{jsonrpc-convert-from-endpoint} can be customized for converting
+between the internal representation of JSONRPC and whatever the
+endpoint accepts (@pxref{Generic Functions}).
 
-In this scenario, @code{jsonrpc-connection} is subclassed to implement
+@item An API for building JSONRPC transports
+
+In this scenario, @code{jsonrpc-connection} is sub-classed to implement
 a different underlying transport strategy (for details on how to
 subclass, see @ref{Inheritance,Inheritance,,eieio}.).  Users of the
 application-building interface can then instantiate objects of this
 concrete class (using the @code{make-instance} function) and connect
-to JSONRPC endpoints using that strategy.
+to JSONRPC endpoints using that strategy.  See @ref{Process-based
+JSONRPC connections} for a built-in transport implementation.
 
 This API has mandatory and optional parts.
 
 @findex jsonrpc-connection-send
 To allow its users to initiate JSONRPC contacts (notifications or
-requests) or reply to endpoint requests, the subclass must have an
-implementation of the @code{jsonrpc-connection-send} method.
+requests) or reply to endpoint requests, the new transport
+implementation must equip the @code{jsonrpc-connection-send} generic
+function with a specialization for the the new subclass
+(@pxref{Generic Functions}).  This generic function is called
+automatically by primitives such as @code{jsonrpc-request} and
+@code{jsonrpc-notify}.  The specialization should ensure that the
+message described in the argument list is sent through whatever
+underlying communication mechanism (a.k.a.@: ``wire'') is used by the
+new transport to talk to endpoints.  This ``wire'' may be a network
+socket, a serial interface, an HTTP connection, etc.
 
 @findex jsonrpc-connection-receive
 Likewise, for handling the three types of remote contacts (requests,
 notifications, and responses to local requests), the transport
 implementation must arrange for the function
-@code{jsonrpc-connection-receive} to be called after noticing a new
-JSONRPC message on the wire (whatever that "wire" may be).
+@code{jsonrpc-connection-receive} to be called from Elisp after
+noticing some data on the ``wire'' that can be used to craft a JSONRPC
+(or quasi-JSONRPC) message.
 
 @findex jsonrpc-shutdown
 @findex jsonrpc-running-p
 Finally, and optionally, the @code{jsonrpc-connection} subclass should
-implement the @code{jsonrpc-shutdown} and @code{jsonrpc-running-p}
-methods if these concepts apply to the transport.  If they do, then
-any system resources (e.g.@: processes, timers, etc.) used to listen for
-messages on the wire should be released in @code{jsonrpc-shutdown},
-i.e.@: they should only be needed while @code{jsonrpc-running-p} is
-non-@code{nil}.
+add specializations to the @code{jsonrpc-shutdown} and
+@code{jsonrpc-running-p} generic functions if these concepts apply to
+the transport.  The specialization of @code{jsonrpc-shutdown} should
+ensure the release of any system resources (e.g.@: processes, timers,
+etc.) used to listen for messages on the wire.  The specialization of
+@code{jsonrpc-running-p} should tell if these resources are still
+active or have already been released (via @code{jsonrpc-shutdown} or
+otherwise).
 
 @end enumerate
 
@@ -6177,6 +6236,17 @@ to @code{activate-change-group}, and finish it with a single call to
 would expect.  Non-nested use of change groups for the same buffer
 will get Emacs confused, so don't let it happen; the first change
 group you start for any given buffer should be the last one finished.
+
+  Emacs keeps track of change groups by assuming that by following
+each cdr in @code{buffer-undo-list}, it will eventually arrive at the
+cons it was set to at the time @code{prepare-change-group} was called.
+
+  If @code{buffer-undo-list} no longer contains that cons, Emacs will
+lose track of any change groups, resulting in an error when the change
+group is canceled.  To avoid this, do not call any functions which
+may edit the undo list in such a manner, when a change group is
+active: notably, ``amalgamating'' commands such as @code{delete-char},
+which call @code{undo-auto-amalgamate}.
 
 @node Change Hooks
 @section Change Hooks

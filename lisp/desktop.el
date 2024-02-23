@@ -1,6 +1,6 @@
 ;;; desktop.el --- save partial status of Emacs when killed -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993-1995, 1997, 2000-2023 Free Software Foundation,
+;; Copyright (C) 1993-1995, 1997, 2000-2024 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Morten Welinder <terra@diku.dk>
@@ -163,13 +163,22 @@ Used at desktop read to provide backward compatibility.")
 (define-minor-mode desktop-save-mode
   "Toggle desktop saving (Desktop Save mode).
 
-When Desktop Save mode is enabled, the state of Emacs is saved from
-one session to another.  In particular, Emacs will save the desktop when
-it exits (this may prompt you; see the option `desktop-save').  The next
-time Emacs starts, if this mode is active it will restore the desktop.
+When Desktop Save mode is enabled, the state of Emacs is saved from one
+session to another.  The saved Emacs \"desktop configuration\" includes the
+buffers, their file names, major modes, buffer positions, window and frame
+configuration, and some important global variables.
 
-To manually save the desktop at any time, use the command `\\[desktop-save]'.
-To load it, use `\\[desktop-read]'.
+To enable this feature for future sessions, customize `desktop-save-mode'
+to t, or add this line in your init file:
+
+    (desktop-save-mode 1)
+
+When this mode is enabled, Emacs will save the desktop when it exits
+(this may prompt you, see the option `desktop-save').  The next time
+Emacs starts, if this mode is active it will restore the desktop.
+
+To manually save the desktop at any time, use the command \\[desktop-save].
+To load it, use \\[desktop-read].
 
 Once a desktop file exists, Emacs will auto-save it according to the
 option `desktop-auto-save-timeout'.
@@ -293,7 +302,7 @@ May be used to show a dired buffer."
   :version "22.1")
 
 (defcustom desktop-not-loaded-hook nil
-  "Normal hook run when the user declines to re-use a desktop file.
+  "Normal hook run when the user declines to reuse a desktop file.
 Run in the directory in which the desktop file was found.
 May be used to deal with accidental multiple Emacs jobs."
   :type 'hook
@@ -397,7 +406,12 @@ or `desktop-modes-not-to-save'."
 (defcustom desktop-files-not-to-save
   "\\(\\`/[^/:]*:\\|(ftp)\\'\\)"
   "Regexp identifying files whose buffers are to be excluded from saving.
-The default value excludes buffers visiting remote files."
+The default value excludes buffers visiting remote files.
+
+If you modify this such that buffers visiting remote files are not excluded,
+you may wish customizing `remote-file-name-access-timeout' to a non-nil
+value, to avoid hanging the desktop restoration because some remote
+host is off-line."
   :type '(choice (const :tag "None" nil)
 		 regexp)
   :group 'desktop)
@@ -450,7 +464,7 @@ If nil, deletes existing frames.
 If `keep', keeps existing frames and does not reuse them."
   :type '(choice (const :tag "Reuse existing frames" t)
 		 (const :tag "Delete existing frames" nil)
-		 (const :tag "Keep existing frames" :keep))
+		 (const :tag "Keep existing frames" keep))
   :group 'desktop
   :version "24.4")
 
@@ -1499,6 +1513,11 @@ This function is called from `window-configuration-change-hook'."
   (desktop-clear)
   (desktop-read desktop-dirname))
 
+;; ----------------------------------------------------------------------------
+(defun desktop-access-file (filename)
+  "Check whether FILENAME is accessible."
+  (ignore-errors (not (access-file filename "Restoring desktop buffer"))))
+
 (defvar desktop-buffer-major-mode)
 (defvar desktop-buffer-locals)
 (defvar auto-insert)  ; from autoinsert.el
@@ -1508,8 +1527,8 @@ This function is called from `window-configuration-change-hook'."
                                     _buffer-misc)
   "Restore a file buffer."
   (when buffer-filename
-    (if (or (file-exists-p buffer-filename)
-	    (let ((msg (format "Desktop: File \"%s\" no longer exists."
+    (if (or (desktop-access-file buffer-filename)
+	    (let ((msg (format "Desktop: File \"%s\" no longer accessible."
 			       buffer-filename)))
 	      (if desktop-missing-file-warning
 		  (y-or-n-p (concat msg " Re-create buffer? "))

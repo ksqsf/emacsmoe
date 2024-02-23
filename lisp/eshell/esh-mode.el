@@ -1,6 +1,6 @@
 ;;; esh-mode.el --- user interface  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2024 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 
@@ -290,7 +290,7 @@ non-interactive sessions, such as when using `eshell-command'.")
   "C-e" #'eshell-show-maximum-output
   "C-f" #'eshell-forward-argument
   "C-m" #'eshell-copy-old-input
-  "C-o" #'eshell-kill-output
+  "C-o" #'eshell-delete-output
   "C-r" #'eshell-show-output
   "C-t" #'eshell-truncate-buffer
   "C-u" #'eshell-kill-input
@@ -360,6 +360,9 @@ and the hook `eshell-exit-hook'."
   (setq-local eshell-last-output-start (point-marker))
   (setq-local eshell-last-output-end (point-marker))
   (setq-local eshell-last-output-block-begin (point))
+
+  (add-function :filter-return (local 'filter-buffer-substring-function)
+                #'eshell--unmark-string-as-output)
 
   (let ((modules-list (copy-sequence eshell-modules-list)))
     (setq-local eshell-modules-list modules-list))
@@ -453,7 +456,7 @@ and the hook `eshell-exit-hook'."
 		     last-command-event))))
 
 (defun eshell-intercept-commands ()
-  (when (and (eshell-interactive-process-p)
+  (when (and eshell-foreground-command
 	     (not (and (integerp last-input-event)
 		       (memq last-input-event '(?\C-x ?\C-c)))))
     (let ((possible-events (where-is-internal this-command))
@@ -616,14 +619,14 @@ If NO-NEWLINE is non-nil, the input is sent without an implied final
 newline."
   (interactive "P")
   ;; Note that the input string does not include its terminal newline.
-  (let ((proc-running-p (and (eshell-head-process)
-			     (not queue-p)))
-	(inhibit-modification-hooks t))
-    (unless (and proc-running-p
+  (let* ((proc-running-p (eshell-head-process))
+         (send-to-process-p (and proc-running-p (not queue-p)))
+         (inhibit-modification-hooks t))
+    (unless (and send-to-process-p
 		 (not (eq (process-status
 			   (eshell-head-process))
                           'run)))
-      (if (or proc-running-p
+      (if (or send-to-process-p
 	      (>= (point) eshell-last-output-end))
 	  (goto-char (point-max))
 	(let ((copy (eshell-get-old-input use-region)))
@@ -631,7 +634,7 @@ newline."
 	  (insert-and-inherit copy)))
       (unless (or no-newline
 		  (and eshell-send-direct-to-subprocesses
-		       proc-running-p))
+		       send-to-process-p))
 	(insert-before-markers-and-inherit ?\n))
       ;; Delete and reinsert input.  This seems like a no-op, except
       ;; for the resulting entries in the undo list: undoing this
@@ -641,7 +644,7 @@ newline."
             (inhibit-read-only t))
         (delete-region eshell-last-output-end (point))
         (insert text))
-      (if proc-running-p
+      (if send-to-process-p
 	  (progn
 	    (eshell-update-markers eshell-last-output-end)
 	    (if (or eshell-send-direct-to-subprocesses
@@ -670,7 +673,8 @@ newline."
 		      (run-hooks 'eshell-input-filter-functions)
 		      (and (catch 'eshell-terminal
 			     (ignore
-			      (if (eshell-invoke-directly cmd)
+			      (if (and (not proc-running-p)
+                                       (eshell-invoke-directly-p cmd))
 				  (eval cmd)
 				(eshell-eval-command cmd input))))
 			   (eshell-life-is-too-much)))))
@@ -828,14 +832,22 @@ This function should be in the list `eshell-output-filter-functions'."
       eshell-last-output-start
     eshell-last-output-end))
 
-(defun eshell-kill-output ()
-  "Kill all output from interpreter since last input.
-Does not delete the prompt."
-  (interactive)
+(defun eshell-delete-output (&optional kill)
+  "Delete all output from interpreter since last input.
+If KILL is non-nil (interactively, the prefix), save the killed text in
+the kill ring.
+
+This command does not delete the prompt."
+  (interactive "P")
   (save-excursion
     (goto-char (eshell-beginning-of-output))
     (insert "*** output flushed ***\n")
+    (when kill
+      (copy-region-as-kill (point) (eshell-end-of-output)))
     (delete-region (point) (eshell-end-of-output))))
+
+(define-obsolete-function-alias 'eshell-kill-output
+  #'eshell-delete-output "30.1")
 
 (defun eshell-show-output (&optional arg)
   "Display start of this batch of interpreter output at top of window.
@@ -967,7 +979,7 @@ buffer's process if STRING contains a password prompt defined by
 `eshell-password-prompt-regexp'.
 
 This function could be in the list `eshell-output-filter-functions'."
-  (when (eshell-interactive-process-p)
+  (when eshell-foreground-command
     (save-excursion
       (let ((case-fold-search t))
 	(goto-char eshell-last-output-block-begin)

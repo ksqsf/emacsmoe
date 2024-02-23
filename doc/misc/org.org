@@ -3619,7 +3619,7 @@ replacement text.  Here is an example:
 
 #+begin_src emacs-lisp
 (setq org-link-abbrev-alist
-      '(("bugzilla"        . "http://10.1.2.9/bugzilla/show_bug.cgi?id=")
+      '(("bugzilla"        . "https://10.1.2.9/bugzilla/show_bug.cgi?id=")
         ("Nu Html Checker" . "https://validator.w3.org/nu/?doc=%h")
         ("duckduckgo"      . "https://duckduckgo.com/?q=%s")
         ("omap"            . "https://nominatim.openstreetmap.org/search?q=%s&polygon=1")
@@ -4562,7 +4562,7 @@ all children are done, you can use the following setup:
 #+begin_src emacs-lisp
 (defun org-summary-todo (n-done n-not-done)
   "Switch entry to DONE when all subentries are done, to TODO otherwise."
-  (let (org-log-done org-log-states)   ; turn off logging
+  (let (org-log-done org-todo-log-states)   ; turn off logging
     (org-todo (if (= n-not-done 0) "DONE" "TODO"))))
 
 (add-hook 'org-after-todo-statistics-hook #'org-summary-todo)
@@ -4606,7 +4606,7 @@ checked.
 #+cindex: statistics, for checkboxes
 #+cindex: checkbox statistics
 #+cindex: @samp{COOKIE_DATA}, property
-#+vindex: org-hierarchical-checkbox-statistics
+#+vindex: org-checkbox-hierarchical-statistics
 The =[2/4]= and =[1/3]= in the first and second line are cookies
 indicating how many checkboxes present in this entry have been checked
 off, and the total number of checkboxes present.  This can give you an
@@ -4614,7 +4614,7 @@ idea on how many checkboxes remain, even without opening a folded
 entry.  The cookies can be placed into a headline or into (the first
 line of) a plain list item.  Each cookie covers checkboxes of direct
 children structurally below the headline/item on which the cookie
-appears[fn:: Set the variable ~org-hierarchical-checkbox-statistics~
+appears[fn:: Set the variable ~org-checkbox-hierarchical-statistics~
 if you want such cookies to count all checkboxes below the cookie, not
 just those belonging to direct children.].  You have to insert the
 cookie yourself by typing either =[/]= or =[%]=.  With =[/]= you get
@@ -5958,8 +5958,9 @@ the agenda (see [[*Weekly/daily agenda]]).  We distinguish:
   #+findex: org-block
 
   For more complex date specifications, Org mode supports using the
-  special expression diary entries implemented in the Emacs Calendar
-  package[fn:20].  For example, with optional time:
+  special expression diary entries implemented in the
+  [[info:emacs#Special Diary Entries][Emacs Calendar package]][fn:20].
+  For example, with optional time:
 
   #+begin_example
   ,* 22:00-23:00 The nerd meeting on every 2nd Thursday of the month
@@ -9430,7 +9431,7 @@ the estimated effort of an entry (see [[*Effort Estimates]]).
 #+vindex: org-agenda-effort-filter-preset
 #+vindex: org-agenda-regexp-filter-preset
 Agenda built-in or custom commands are statically defined.  Agenda
-filters and limits allow to flexibly narrow down the list of agenda
+filters and limits allow flexibly narrowing down the list of agenda
 entries.
 
 /Filters/ only change the visibility of items, are very fast and are
@@ -16033,7 +16034,12 @@ can remove every headline in the buffer during export like this:
   "Remove all headlines in the current buffer.
 BACKEND is the export back-end being used, as a symbol."
   (org-map-entries
-   (lambda () (delete-region (point) (line-beginning-position 2)))))
+   (lambda ()
+     (delete-region (point) (line-beginning-position 2))
+     ;; We need to tell `org-map-entries' to not skip over heading at
+     ;; point. Otherwise, it would continue from _next_ heading. See
+     ;; the docstring of `org-map-entries' for details.
+     (setq org-map-continue-from (point)))))
 
 (add-hook 'org-export-before-parsing-hook #'my-headline-removal)
 #+end_src
@@ -18096,7 +18102,8 @@ evaluating untrusted code blocks by prompting for a confirmation.
 
 - =yes= ::
 
-  Org always evaluates the source code without asking permission.
+  Org evaluates the source code, possibly asking permission according
+  to ~org-confirm-babel-evaluate~.
 
 - =never= or =no= ::
 
@@ -20259,12 +20266,12 @@ packages are documented here.
   #+vindex: org-table-formula-constants
 
   Org can use names for constants in formulas in tables.  Org can also
-  use calculation suffixes for units, such as =M= for =Mega=.  For
-  a standard collection of such constants, install the =constants=
+  use calculation suffixes for units, such as =M= for =Mega=.  For a
+  standard collection of such constants, install the =constants=
   package.  Install version 2.0 of this package, available at
-  [[http://www.astro.uva.nl/~dominik/Tools]].  Org checks if the function
-  ~constants-get~ has been autoloaded.  Installation instructions are
-  in the file =constants.el=.
+  [[https://github.com/cdominik/constants-for-Emacs]].  Org checks if the
+  function ~constants-get~ has been autoloaded.  Installation
+  instructions are in the file =constants.el=.
 
 - =cdlatex.el= by Carsten Dominik ::
   #+cindex: @file{cdlatex.el}
@@ -20686,8 +20693,8 @@ adding ~:rewrites~ rules like this:
 
 #+texinfo: @noindent
 Since =example.com/$= is used as a regular expression, it maps
-=http://example.com/=, =https://example.com=,
-=http://www.example.com/= and similar to
+=https://example.com/=, =https://example.com=,
+=https://www.example.com/= and similar to
 =/home/user/example/index.php=.
 
 The ~:rewrites~ rules are searched as a last resort if and only if no
@@ -22308,7 +22315,7 @@ that are mentioned in the manual.  For a more complete list, use
 
 This manual is for Org version {{{version}}}.
 
-Copyright \copy 2004--2023 Free Software Foundation, Inc.
+Copyright \copy 2004--2024 Free Software Foundation, Inc.
 
 #+begin_quote
 Permission is granted to copy, distribute and/or modify this document

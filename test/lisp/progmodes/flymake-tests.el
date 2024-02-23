@@ -1,6 +1,6 @@
 ;;; flymake-tests.el --- Test suite for flymake -*- lexical-binding: t -*-
 
-;; Copyright (C) 2011-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2024 Free Software Foundation, Inc.
 
 ;; Author: Eduard Wiebe <usenet@pusto.de>
 
@@ -213,6 +213,7 @@ SEVERITY-PREDICATE is used to setup
 
 (ert-deftest dummy-backends ()
   "Test many different kinds of backends."
+  (let ((debug-on-error nil))
   (with-temp-buffer
     (cl-letf
         (((symbol-function 'error-backend)
@@ -291,7 +292,7 @@ SEVERITY-PREDICATE is used to setup
         (should (eq 'flymake-warning (face-at-point))) ; dolor
         (flymake-goto-next-error)
         (should (eq 'flymake-error (face-at-point))) ; prognata
-        (should-error (flymake-goto-next-error nil nil t))))))
+        (should-error (flymake-goto-next-error nil nil t)))))))
 
 (ert-deftest recurrent-backend ()
   "Test a backend that calls REPORT-FN multiple times."

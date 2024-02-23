@@ -1,6 +1,6 @@
 ;;; lunar.el --- calendar functions for phases of the moon  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1992-1993, 1995, 1997, 2001-2023 Free Software
+;; Copyright (C) 1992-1993, 1995, 1997, 2001-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Author: Edward M. Reingold <reingold@cs.uiuc.edu>
@@ -226,7 +226,7 @@ use instead of point."
   (interactive (list last-nonmenu-event))
   ;; If called from a menu, with the calendar window not selected.
   (with-current-buffer
-      (if event (window-buffer (posn-window (event-start event)))
+      (if event (calendar-event-buffer event)
         (current-buffer))
     (message "Computing phases of the moon...")
     (let ((m1 displayed-month)

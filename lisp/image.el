@@ -1,6 +1,6 @@
 ;;; image.el --- image API  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1998-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1998-2024 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: multimedia
@@ -38,7 +38,7 @@
 (defconst image-type-header-regexps
   `(("\\`/[\t\n\r ]*\\*.*XPM.\\*/" . xpm)
     ("\\`P[1-6]\\(?:\
-\\(?:\\(?:#[^\r\n]*[\r\n]\\)*[[:space:]]\\)+\
+\\(?:\\(?:#[^\r\n]*[\r\n]\\)*[ \t\r\n]\\)+\
 \\(?:\\(?:#[^\r\n]*[\r\n]\\)*[0-9]\\)+\
 \\)\\{2\\}" . pbm)
     ("\\`GIF8[79]a" . gif)
@@ -51,7 +51,7 @@ static \\(unsigned \\)?char \\1_bits" . xbm)
     ("\\`\\(?:MM\0\\*\\|II\\*\0\\)" . tiff)
     ("\\`[\t\n\r ]*%!PS" . postscript)
     ("\\`\xff\xd8" . jpeg)    ; used to be (image-jpeg-p . jpeg)
-    ("\\`RIFF....WEBPVP8" . webp)
+    ("\\`RIFF[^z-a][^z-a][^z-a][^z-a]WEBPVP8" . webp)
     (,(let* ((incomment-re "\\(?:[^-]\\|-[^-]\\)")
 	     (comment-re (concat "\\(?:!--" incomment-re "*-->[ \t\r\n]*<\\)")))
 	(concat "\\(?:<\\?xml[ \t\r\n]+[^>]*>\\)?[ \t\r\n]*<"
@@ -172,21 +172,26 @@ or \"ffmpeg\") is installed."
 
 (define-error 'unknown-image-type "Unknown image type")
 
-(defvar-keymap image-map
-  :doc "Map put into text properties on images."
+(defvar-keymap image-slice-map
+  :doc "Map put into text properties on sliced images."
   "i" (define-keymap
         "-" #'image-decrease-size
         "+" #'image-increase-size
-        "r" #'image-rotate
         "o" #'image-save
         "c" #'image-crop
-        "x" #'image-cut
-        "h" #'image-flip-horizontally
-        "v" #'image-flip-vertically)
+        "x" #'image-cut)
   "C-<wheel-down>" #'image-mouse-decrease-size
   "C-<mouse-5>"    #'image-mouse-decrease-size
   "C-<wheel-up>"   #'image-mouse-increase-size
   "C-<mouse-4>"    #'image-mouse-increase-size)
+
+(defvar-keymap image-map
+  :doc "Map put into text properties on images."
+  :parent image-slice-map
+  "i" (define-keymap
+        "r" #'image-rotate
+        "h" #'image-flip-horizontally
+        "v" #'image-flip-vertically))
 
 (defun image-load-path-for-library (library image &optional path no-error)
   "Return a suitable search path for images used by LIBRARY.
@@ -595,8 +600,8 @@ If nil, use the `image-scaling-factor' variable."
 IMAGE must be an image created with `create-image' or `defimage'.
 IMAGE is displayed by putting an overlay into the current buffer with a
 `before-string' STRING that has a `display' property whose value is the
-image.  STRING is defaulted if you omit it.
-The overlay created will have the `put-image' property set to t.
+image.  STRING defaults to \"x\" if it's nil or omitted.
+The overlay created by this function has the `put-image' property set to t.
 POS may be an integer or marker.
 AREA is where to display the image.  AREA nil or omitted means
 display it in the text area, a value of `left-margin' means
@@ -665,7 +670,9 @@ is non-nil, this is inhibited."
 				      image)
                                    rear-nonsticky t
 				   inhibit-isearch ,inhibit-isearch
-                                   keymap ,image-map))))
+                                   keymap ,(if slice
+                                               image-slice-map
+                                             image-map)))))
 
 
 ;;;###autoload
@@ -701,8 +708,8 @@ The image is automatically split into ROWS x COLS slices."
 	  (insert string)
 	  (add-text-properties start (point)
 			       `(display ,(list (list 'slice x y dx dy) image)
-					 rear-nonsticky (display)
-                                         keymap ,image-map))
+					 rear-nonsticky (display keymap)
+                                         keymap ,image-slice-map))
 	  (setq x (+ x dx))))
       (setq x 0.0
 	    y (+ y dy))
@@ -752,21 +759,25 @@ BUFFER nil or omitted means use the current buffer."
 
 ;;;###autoload
 (defun find-image (specs &optional cache)
-  "Find an image, choosing one of a list of image specifications.
+  "Find an image that satisfies one of a list of image specifications.
 
 SPECS is a list of image specifications.
 
-Each image specification in SPECS is a property list.  The contents of
-a specification are image type dependent.  All specifications must at
-least contain either the property `:file FILE' or `:data DATA',
-where FILE is the file to load the image from, and DATA is a string
-containing the actual image data.  If the property `:type TYPE' is
-omitted or nil, try to determine the image type from its first few
+Each image specification in SPECS is a property list.  The
+contents of a specification are image type dependent; see the
+info node `(elisp)Image Descriptors' for details.  All specifications
+must at least contain either the property `:file FILE' or `:data DATA',
+where FILE is the file from which to load the image, and DATA is a
+string containing the actual image data.  If the property `:type TYPE'
+is omitted or nil, try to determine the image type from its first few
 bytes of image data.  If that doesn't work, and the property `:file
-FILE' provide a file name, use its file extension as image type.
-If `:type TYPE' is provided, it must match the actual type
-determined for FILE or DATA by `create-image'.  Return nil if no
-specification is satisfied.
+FILE' provide a file name, use its file extension as idication of the
+image type. If `:type TYPE' is provided, it must match the actual type
+determined for FILE or DATA by `create-image'.
+
+The function returns the image specification for the first specification
+in the list whose TYPE is supported and FILE, if specified, exists.  It
+returns nil if no specification in the list can be satisfied.
 
 If CACHE is non-nil, results are cached and returned on subsequent calls.
 
@@ -1158,9 +1169,11 @@ has no effect."
   "r" #'image-rotate)
 
 (defun image-increase-size (&optional n position)
-  "Increase the image size by a factor of N.
-If N is 3, then the image size will be increased by 30%.  The
-default is 20%."
+  "Increase the image size at POSITION by a factor specified by N.
+If N is 3, then the image size will be increased by 30%.  More
+generally, the image size is multiplied by 1 plus N divided by 10.
+N defaults to 2, which increases the image size by 20%.
+POSITION can be a buffer position or a marker, and defaults to point."
   (interactive "P")
   (image--delayed-change-size (if n
                                   (1+ (/ (prefix-numeric-value n) 10.0))
@@ -1179,9 +1192,11 @@ default is 20%."
   (run-with-idle-timer 0.3 nil #'image--change-size size position))
 
 (defun image-decrease-size (&optional n position)
-  "Decrease the image size by a factor of N.
-If N is 3, then the image size will be decreased by 30%.  The
-default is 20%."
+  "Decrease the image size at POSITION by a factor specified by N.
+If N is 3, then the image size will be decreased by 30%.  More
+generally, the image size is multiplied by 1 minus N divided by 10.
+N defaults to 2, which decreases the image size by 20%.
+POSITION can be a buffer position or a marker, and defaults to point."
   (interactive "P")
   (image--delayed-change-size (if n
                                   (- 1 (/ (prefix-numeric-value n) 10.0))
@@ -1191,7 +1206,9 @@ default is 20%."
                      "Use %k for further adjustments"))
 
 (defun image-mouse-increase-size (&optional event)
-  "Increase the image size using the mouse."
+  "Increase the image size using the mouse-gesture EVENT.
+This increases the size of the image at the position specified by
+EVENT, if any, by the default factor used by `image-increase-size'."
   (interactive "e")
   (when (listp event)
     (save-window-excursion
@@ -1199,7 +1216,9 @@ default is 20%."
       (image-increase-size nil (point-marker)))))
 
 (defun image-mouse-decrease-size (&optional event)
-  "Decrease the image size using the mouse."
+  "Decrease the image size using the mouse-gesture EVENT.
+This decreases the size of the image at the position specified by
+EVENT, if any, by the default factor used by `image-decrease-size'."
   (interactive "e")
   (when (listp event)
     (save-window-excursion
@@ -1207,12 +1226,24 @@ default is 20%."
       (image-decrease-size nil (point-marker)))))
 
 (defun image--get-image (&optional position)
-  "Return the image at point."
-  (let ((image (get-char-property (or position (point)) 'display
-                                  (when (markerp position)
-                                    (marker-buffer position)))))
+  "Return the image at POSITION.
+POSITION can be a buffer position or a marker, and defaults to point."
+  (let* ((image (get-char-property (or position (point)) 'display
+                                   (when (markerp position)
+                                     (marker-buffer position))))
+         (image-car (car-safe image))
+         (image
+          (cond ((eq image-car 'image)
+                 image)
+                ;; The value of the display property could be a sliced
+                ;; image of the form ((slice ...) (image ...)).
+                ;; FIXME: can we have more than 2 members in the list,
+                ;; so that the (image ...) part is NOT the cadr?
+                ((and (listp image) (consp image-car))
+                 (cadr image))
+                (t nil))))
     (unless (eq (car-safe image) 'image)
-      (error "No image under point"))
+      (error "No recognizable image under point"))
     image))
 
 ;;;###autoload

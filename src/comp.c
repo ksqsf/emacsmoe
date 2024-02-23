@@ -1,7 +1,7 @@
 /* Compile Emacs Lisp into native code.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
 
-Author: Andrea Corallo <akrl@sdf.org>
+Author: Andrea Corallo <acorallo@gnu.org>
 
 This file is part of GNU Emacs.
 
@@ -502,9 +502,11 @@ load_gccjit_if_necessary (bool mandatory)
 #define THIRD(x)				\
   XCAR (XCDR (XCDR (x)))
 
+#if 0	/* unused for now */
 /* Like call0 but stringify and intern.  */
 #define CALL0I(fun)				\
   CALLN (Ffuncall, intern_c_string (STR (fun)))
+#endif
 
 /* Like call1 but stringify and intern.  */
 #define CALL1I(fun, arg)				\
@@ -520,7 +522,7 @@ load_gccjit_if_necessary (bool mandatory)
 
 #define DECL_BLOCK(name, func)				\
   gcc_jit_block *(name) =				\
-    gcc_jit_function_new_block ((func), STR (name))
+    gcc_jit_function_new_block (func, STR (name))
 
 #ifndef WINDOWSNT
 # ifdef HAVE__SETJMP
@@ -774,7 +776,7 @@ comp_hash_source_file (Lisp_Object filename)
 #else
   int res = md5_stream (f, SSDATA (digest));
 #endif
-  fclose (f);
+  emacs_fclose (f);
 
   if (res)
     xsignal2 (Qfile_notify_error, build_string ("hashing failed"), filename);
@@ -4328,11 +4330,10 @@ compile_function (Lisp_Object func)
   declare_block (Qentry);
   Lisp_Object blocks = CALL1I (comp-func-blocks, func);
   struct Lisp_Hash_Table *ht = XHASH_TABLE (blocks);
-  for (ptrdiff_t i = 0; i < HASH_TABLE_SIZE (ht); i++)
+  DOHASH_SAFE (ht, i)
     {
       Lisp_Object block_name = HASH_KEY (ht, i);
-      if (!EQ (block_name, Qentry)
-	  && !BASE_EQ (block_name, Qunbound))
+      if (!EQ (block_name, Qentry))
 	declare_block (block_name);
     }
 
@@ -4342,24 +4343,21 @@ compile_function (Lisp_Object func)
 				gcc_jit_lvalue_as_rvalue (comp.func_relocs));
 
 
-  for (ptrdiff_t i = 0; i < HASH_TABLE_SIZE (ht); i++)
+  DOHASH_SAFE (ht, i)
     {
       Lisp_Object block_name = HASH_KEY (ht, i);
-      if (!BASE_EQ (block_name, Qunbound))
-	{
-	  Lisp_Object block = HASH_VALUE (ht, i);
-	  Lisp_Object insns = CALL1I (comp-block-insns, block);
-	  if (NILP (block) || NILP (insns))
-	    xsignal1 (Qnative_ice,
-		      build_string ("basic block is missing or empty"));
+      Lisp_Object block = HASH_VALUE (ht, i);
+      Lisp_Object insns = CALL1I (comp-block-insns, block);
+      if (NILP (block) || NILP (insns))
+	xsignal1 (Qnative_ice,
+		  build_string ("basic block is missing or empty"));
 
-	  comp.block = retrive_block (block_name);
-	  while (CONSP (insns))
-	    {
-	      Lisp_Object insn = XCAR (insns);
-	      emit_limple_insn (insn);
-	      insns = XCDR (insns);
-	    }
+      comp.block = retrive_block (block_name);
+      while (CONSP (insns))
+	{
+	  Lisp_Object insn = XCAR (insns);
+	  emit_limple_insn (insn);
+	  insns = XCDR (insns);
 	}
     }
   const char *err =  gcc_jit_context_get_first_error (comp.ctxt);
@@ -4747,7 +4745,7 @@ DEFUN ("comp--release-ctxt", Fcomp__release_ctxt, Scomp__release_ctxt,
     gcc_jit_context_release (comp.ctxt);
 
   if (logfile)
-    fclose (logfile);
+    emacs_fclose (logfile);
   comp.ctxt = NULL;
 
   return Qt;
@@ -4861,8 +4859,8 @@ add_compiler_options (void)
 #endif
 }
 
-DEFUN ("comp--compile-ctxt-to-file", Fcomp__compile_ctxt_to_file,
-       Scomp__compile_ctxt_to_file,
+DEFUN ("comp--compile-ctxt-to-file0", Fcomp__compile_ctxt_to_file0,
+       Scomp__compile_ctxt_to_file0,
        1, 1, 0,
        doc: /* Compile the current context as native code to file FILENAME.  */)
   (Lisp_Object filename)
@@ -4963,14 +4961,12 @@ DEFUN ("comp--compile-ctxt-to-file", Fcomp__compile_ctxt_to_file,
 
   struct Lisp_Hash_Table *func_h =
     XHASH_TABLE (CALL1I (comp-ctxt-funcs-h, Vcomp_ctxt));
-  for (ptrdiff_t i = 0; i < HASH_TABLE_SIZE (func_h); i++)
-    if (!BASE_EQ (HASH_VALUE (func_h, i), Qunbound))
-      declare_function (HASH_VALUE (func_h, i));
+  DOHASH_SAFE (func_h, i)
+    declare_function (HASH_VALUE (func_h, i));
   /* Compile all functions. Can't be done before because the
      relocation structs has to be already defined.  */
-  for (ptrdiff_t i = 0; i < HASH_TABLE_SIZE (func_h); i++)
-    if (!BASE_EQ (HASH_VALUE (func_h, i), Qunbound))
-      compile_function (HASH_VALUE (func_h, i));
+  DOHASH_SAFE (func_h, i)
+    compile_function (HASH_VALUE (func_h, i));
 
   /* Work around bug#46495 (GCC PR99126). */
 #if defined (WIDE_EMACS_INT)						\
@@ -5199,17 +5195,9 @@ maybe_defer_native_compilation (Lisp_Object function_name,
 
   Fputhash (function_name, definition, Vcomp_deferred_pending_h);
 
-  /* This is so deferred compilation is able to compile comp
-     dependencies breaking circularity.  */
-  if (comp__compilable)
-    {
-      /* Startup is done, comp is usable.  */
-      CALL0I (startup--require-comp-safely);
-      CALLN (Ffuncall, intern_c_string ("native--compile-async"),
-	     src, Qnil, Qlate);
-    }
-  else
-    Vcomp__delayed_sources = Fcons (src, Vcomp__delayed_sources);
+  pending_funcalls
+    = Fcons (list (Qnative__compile_async, src, Qnil, Qlate),
+             pending_funcalls);
 }
 
 
@@ -5674,13 +5662,6 @@ void
 syms_of_comp (void)
 {
 #ifdef HAVE_NATIVE_COMP
-  DEFVAR_LISP ("comp--delayed-sources", Vcomp__delayed_sources,
-    doc: /* List of sources to be native-compiled when startup is finished.
-For internal use.  */);
-  DEFVAR_BOOL ("comp--compilable", comp__compilable,
-    doc: /* Non-nil when comp.el can be native compiled.
-For internal use. */);
-  /* Compiler control customizes.  */
   DEFVAR_BOOL ("native-comp-jit-compilation", native_comp_jit_compilation,
     doc: /* If non-nil, compile loaded .elc files asynchronously.
 
@@ -5798,6 +5779,8 @@ natively-compiled one.  */);
         build_pure_c_string ("eln file inconsistent with current runtime "
 			     "configuration, please recompile"));
 
+  DEFSYM (Qnative__compile_async, "native--compile-async");
+
   defsubr (&Scomp__subr_signature);
   defsubr (&Scomp_el_to_eln_rel_filename);
   defsubr (&Scomp_el_to_eln_filename);
@@ -5806,7 +5789,7 @@ natively-compiled one.  */);
   defsubr (&Scomp__install_trampoline);
   defsubr (&Scomp__init_ctxt);
   defsubr (&Scomp__release_ctxt);
-  defsubr (&Scomp__compile_ctxt_to_file);
+  defsubr (&Scomp__compile_ctxt_to_file0);
   defsubr (&Scomp_libgccjit_version);
   defsubr (&Scomp__register_lambda);
   defsubr (&Scomp__register_subr);
@@ -5909,6 +5892,14 @@ For internal use.  */);
     doc: /* Hash table recording all loaded compilation units, file -> CU.  */);
   Vcomp_loaded_comp_units_h =
     CALLN (Fmake_hash_table, QCweakness, Qvalue, QCtest, Qequal);
+
+  DEFVAR_LISP ("comp-subr-arities-h", Vcomp_subr_arities_h,
+    doc: /* Hash table recording the arity of Lisp primitives.
+This is in case they are redefined so the compiler still knows how to
+compile calls to them.
+subr-name -> arity
+For internal use.  */);
+  Vcomp_subr_arities_h = CALLN (Fmake_hash_table, QCtest, Qequal);
 
   Fprovide (intern_c_string ("native-compile"), Qnil);
 #endif /* #ifdef HAVE_NATIVE_COMP */

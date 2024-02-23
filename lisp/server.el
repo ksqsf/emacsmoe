@@ -1,6 +1,6 @@
 ;;; server.el --- Lisp code for GNU Emacs running as server process -*- lexical-binding: t -*-
 
-;; Copyright (C) 1986-1987, 1992, 1994-2023 Free Software Foundation,
+;; Copyright (C) 1986-1987, 1992, 1994-2024 Free Software Foundation,
 ;; Inc.
 
 ;; Author: William Sommerfeld <wesommer@athena.mit.edu>
@@ -182,8 +182,10 @@ space (this means characters from ! to ~; or from code 33 to
   :type 'hook)
 
 (defcustom server-after-make-frame-hook nil
-  "Hook run when the Emacs server creates a client frame.
-The created frame is selected when the hook is called."
+  "Hook run when the Emacs server starts using a client frame.
+The client frame is selected when the hook is called.
+The client frame could be a newly-created frame, or an
+existing frame reused for this purpose."
   :type 'hook
   :version "27.1")
 
@@ -328,6 +330,9 @@ ENV should be in the same format as `process-environment'."
 (defun server-delete-client (proc &optional noframe)
   "Delete PROC, including its buffers, terminals and frames.
 If NOFRAME is non-nil, let the frames live.
+If NOFRAME is the symbol \\='dont-kill-client, also don't
+delete PROC or its terminals, just kill its buffers: this is
+for when `find-alternate-file' calls this via `kill-buffer-hook'.
 Updates `server-clients'."
   (server-log (concat "server-delete-client" (if noframe " noframe")) proc)
   ;; Force a new lookup of client (prevents infinite recursion).
@@ -364,23 +369,28 @@ Updates `server-clients'."
 	    (set-frame-parameter frame 'client nil)
 	    (delete-frame frame))))
 
-      (setq server-clients (delq proc server-clients))
+      (or (eq noframe 'dont-kill-client)
+          (setq server-clients (delq proc server-clients)))
 
       ;; Delete the client's tty, except on Windows (both GUI and
       ;; console), where there's only one terminal and does not make
       ;; sense to delete it, or if we are explicitly told not.
       (unless (or (eq system-type 'windows-nt)
+                  ;; 'find-alternate-file' caused the last client
+                  ;; buffer to be killed, but we will reuse the client
+                  ;; for another buffer.
+                  (eq noframe 'dont-kill-client)
                   (process-get proc 'no-delete-terminal))
 	(let ((terminal (process-get proc 'terminal)))
 	  ;; Only delete the terminal if it is non-nil.
 	  (when (and terminal (eq (terminal-live-p terminal) t))
 	    (delete-terminal terminal))))
 
-      ;; Delete the client's process.
-      (if (eq (process-status proc) 'open)
-	  (delete-process proc))
-
-      (server-log "Deleted" proc))))
+      ;; Delete the client's process (or don't).
+      (unless (eq noframe 'dont-kill-client)
+        (if (eq (process-status proc) 'open)
+	    (delete-process proc))
+        (server-log "Deleted" proc)))))
 
 (defvar server-log-time-function #'current-time-string
   "Function to generate timestamps for `server-buffer'.")
@@ -719,7 +729,9 @@ the `server-process' variable."
         (concat "Unable to start the Emacs server.\n"
                 (cadr err)
                 (substitute-command-keys
-                 "\nTo start the server in this Emacs process, stop the existing server or call `\\[server-force-delete]' to forcibly disconnect it."))
+                 (concat "\nTo start the server in this Emacs process, stop "
+                         "the existing server or call \\[server-force-delete] "
+                         "to forcibly disconnect it.")))
         :warning)
        (setq leave-dead t)))
       ;; Now any previous server is properly stopped.
@@ -1143,8 +1155,18 @@ The following commands are accepted by the client:
 	  (process-put proc :authenticated t)
 	  (server-log "Authentication successful" proc))
       (server-log "Authentication failed" proc)
+      ;; Display the error as a message and give the user time to see
+      ;; it, in case the error written by emacsclient to stderr is not
+      ;; visible for some reason.
+      (message "Authentication failed")
+      (sit-for 2)
       (server-send-string
        proc (concat "-error " (server-quote-arg "Authentication failed")))
+      (unless (eq system-type 'windows-nt)
+        (let ((terminal (process-get proc 'terminal)))
+          ;; Only delete the terminal if it is non-nil.
+          (when (and terminal (eq (terminal-live-p terminal) t))
+	    (delete-terminal terminal))))
       ;; Before calling `delete-process', give emacsclient time to
       ;; receive the error string and shut down on its own.
       (sit-for 1)
@@ -1179,6 +1201,7 @@ The following commands are accepted by the client:
 		parent-id  ; Window ID for XEmbed
 		dontkill   ; t if client should not be killed.
 		commands
+		evalexprs
 		dir
 		use-current-frame
 		frame-parameters  ;parameters for newly created frame
@@ -1267,9 +1290,12 @@ The following commands are accepted by the client:
                  ;; choice there.)  In daemon mode on Windows, we can't
                  ;; make tty frames, so force the frame type to GUI
                  ;; there too.
-                 (when (and (eq system-type 'windows-nt)
-                            (or (daemonp)
-                                (eq window-system 'w32)))
+                 (when (or (and (eq system-type 'windows-nt)
+                                (or (daemonp)
+                                    (eq window-system 'w32)))
+                           ;; Client runs on Windows, but the server
+                           ;; runs on a Posix host.
+                           (equal tty-name "CONOUT$"))
                    (push "-window-system" args-left)))
 
                 ;; -position +LINE[:COLUMN]:  Set point to the given
@@ -1309,8 +1335,7 @@ The following commands are accepted by the client:
                  (let ((expr (pop args-left)))
                    (if coding-system
                        (setq expr (decode-coding-string expr coding-system)))
-                   (push (lambda () (server-eval-and-print expr proc))
-                         commands)
+                   (push expr evalexprs)
                    (setq filepos nil)))
 
                 ;; -env NAME=VALUE:  An environment variable.
@@ -1335,7 +1360,7 @@ The following commands are accepted by the client:
 	    ;; arguments, use an existing frame.
 	    (and nowait
 		 (not (eq tty-name 'window-system))
-		 (or files commands)
+		 (or files commands evalexprs)
 		 (setq use-current-frame t))
 
 	    (setq frame
@@ -1384,7 +1409,7 @@ The following commands are accepted by the client:
                  (let ((default-directory
                          (if (and dir (file-directory-p dir))
                              dir default-directory)))
-                   (server-execute proc files nowait commands
+                   (server-execute proc files nowait commands evalexprs
                                    dontkill frame tty-name)))))
 
             (when (or frame files)
@@ -1394,22 +1419,35 @@ The following commands are accepted by the client:
     ;; condition-case
     (t (server-return-error proc err))))
 
-(defun server-execute (proc files nowait commands dontkill frame tty-name)
+(defvar server-eval-args-left nil
+  "List of eval args not yet processed.
+
+Adding or removing strings from this variable while the Emacs
+server is processing a series of eval requests will affect what
+Emacs evaluates.
+
+See also `argv' for a similar variable which works for
+invocations of \"emacs\".")
+
+(defun server-execute (proc files nowait commands evalexprs dontkill frame tty-name)
   ;; This is run from timers and process-filters, i.e. "asynchronously".
   ;; But w.r.t the user, this is not really asynchronous since the timer
   ;; is run after 0s and the process-filter is run in response to the
   ;; user running `emacsclient'.  So it is OK to override the
-  ;; inhibit-quit flag, which is good since `commands' (as well as
+  ;; inhibit-quit flag, which is good since `evalexprs' (as well as
   ;; find-file-noselect via the major-mode) can run arbitrary code,
   ;; including code that needs to wait.
   (with-local-quit
     (condition-case err
         (let ((buffers (server-visit-files files proc nowait)))
           (mapc 'funcall (nreverse commands))
+          (let ((server-eval-args-left (nreverse evalexprs)))
+            (while server-eval-args-left
+              (server-eval-and-print (pop server-eval-args-left) proc)))
 	  ;; If we were told only to open a new client, obey
 	  ;; `initial-buffer-choice' if it specifies a file
           ;; or a function.
-          (unless (or files commands)
+          (unless (or files commands evalexprs)
             (let ((buf
                    (cond ((stringp initial-buffer-choice)
 			  (find-file-noselect initial-buffer-choice))
@@ -1462,10 +1500,20 @@ The following commands are accepted by the client:
 
 (defun server-return-error (proc err)
   (ignore-errors
+    ;; Display the error as a message and give the user time to see
+    ;; it, in case the error written by emacsclient to stderr is not
+    ;; visible for some reason.
+    (message (error-message-string err))
+    (sit-for 2)
     (server-send-string
      proc (concat "-error " (server-quote-arg
                              (error-message-string err))))
     (server-log (error-message-string err) proc)
+    (unless (eq system-type 'windows-nt)
+      (let ((terminal (process-get proc 'terminal)))
+        ;; Only delete the terminal if it is non-nil.
+        (when (and terminal (eq (terminal-live-p terminal) t))
+	  (delete-terminal terminal))))
     ;; Before calling `delete-process', give emacsclient time to
     ;; receive the error string and shut down on its own.
     (sit-for 5)
@@ -1568,7 +1616,8 @@ FOR-KILLING if non-nil indicates that we are called from `kill-buffer'."
 		;; frames, which might change the current buffer.  We
 		;; don't want that (bug#640).
 		(save-current-buffer
-		  (server-delete-client proc))
+		  (server-delete-client proc
+                                        find-alternate-file-dont-kill-client))
 	      (server-delete-client proc))))))
     (when (and (bufferp buffer) (buffer-name buffer))
       ;; We may or may not kill this buffer;
@@ -1929,12 +1978,22 @@ This sets the variable `server-stop-automatically' (which see)."
   ;; continue standard unloading
   nil)
 
+(define-error 'server-return-invalid-read-syntax
+              "Emacs server returned unreadable result of evaluation"
+              'invalid-read-syntax)
+
 (defun server-eval-at (server form)
   "Contact the Emacs server named SERVER and evaluate FORM there.
-Returns the result of the evaluation, or signals an error if it
-cannot contact the specified server.  For example:
+Returns the result of the evaluation.  For example:
   (server-eval-at \"server\" \\='(emacs-pid))
-returns the process ID of the Emacs instance running \"server\"."
+returns the process ID of the Emacs instance running \"server\".
+
+This function signals `error' if it could not contact the server.
+
+This function signals `server-return-invalid-read-syntax' if
+`read' fails on the result returned by the server.
+This will occur whenever the result of evaluating FORM is
+something that cannot be printed readably."
   (let* ((server-dir (if server-use-tcp server-auth-dir server-socket-dir))
          (server-file (expand-file-name server server-dir))
          (coding-system-for-read 'binary)
@@ -1980,8 +2039,14 @@ returns the process ID of the Emacs instance running \"server\"."
 					  (progn (skip-chars-forward "^\n")
 						 (point))))))
 	(if (not (equal answer ""))
-	    (read (decode-coding-string (server-unquote-arg answer)
-					'emacs-internal)))))))
+            (condition-case err
+	        (read
+                 (decode-coding-string (server-unquote-arg answer)
+				       'emacs-internal))
+              ;; Re-signal with a more specific condition.
+              (invalid-read-syntax
+               (signal 'server-return-invalid-read-syntax
+                       (cdr err)))))))))
 
 
 (provide 'server)

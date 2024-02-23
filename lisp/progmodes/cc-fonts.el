@@ -1,6 +1,6 @@
 ;; cc-fonts.el --- font lock support for CC Mode -*- lexical-binding: t -*-
 
-;; Copyright (C) 2002-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2002-2024 Free Software Foundation, Inc.
 
 ;; Authors:    2003- Alan Mackenzie
 ;;             2002- Martin Stjernholm
@@ -387,7 +387,7 @@
 	      (parse-sexp-lookup-properties
 	       (cc-eval-when-compile
 		 (boundp 'parse-sexp-lookup-properties))))
-	  ,(c-make-font-lock-search-form regexp highlights))
+	  ,(c-make-font-lock-search-form regexp highlights t))
 	nil)))
 
   (defun c-make-font-lock-BO-decl-search-function (regexp &rest highlights)
@@ -1112,7 +1112,7 @@ casts and declarations are fontified.  Used on level 2 and higher."
   ;; 'c-decl-type-start (according to TYPES).  Stop at LIMIT.
   ;;
   ;; If TYPES is t, fontify all identifiers as types; if it is a number, a
-  ;; buffer position, additionally set the `c-deftype' text property on the
+  ;; buffer position, additionally set the `c-typedef' text property on the
   ;; keyword at that position; if it is nil fontify as either variables or
   ;; functions, otherwise TYPES is a face to use.  If NOT-TOP is non-nil, we
   ;; are not at the top-level ("top-level" includes being directly inside a
@@ -1388,7 +1388,8 @@ casts and declarations are fontified.  Used on level 2 and higher."
 				  (memq type '(c-decl-arg-start
 					       c-decl-type-start))))))))
 		      ((and (zerop (c-backward-token-2))
-			    (looking-at c-fun-name-substitute-key)))))))))
+			    (looking-at c-fun-name-substitute-key)
+			    (not (eq (char-after (match-end 0)) ?_))))))))))
       ;; Cache the result of this test for next time around.
       (c-put-char-property (1- match-pos) 'c-type 'c-decl-arg-start)
       (cons 'decl nil))
@@ -1889,6 +1890,38 @@ casts and declarations are fontified.  Used on level 2 and higher."
 	      (c-font-lock-declarators limit t in-typedef
 				       (not (c-bs-at-toplevel-p (point)))))))))))
 
+(defun c-font-lock-ids-with-dollar (limit)
+  ;; Maybe fontify identifiers with a dollar using `font-lock-warning-face'.
+  ;; This is done only for languages which tolerate a $ in ids, and only when
+  ;; the flag variable `c-warn-ids-with-dollar' is set to non-nil.  This
+  ;; function only works after functions such as `c-font-lock-declarations'
+  ;; have already been run.
+  ;;
+  ;; This function will be called from font-lock for a region bounded by POINT
+  ;; and LIMIT, as though it were to identify a keyword for
+  ;; font-lock-keyword-face.  It always returns NIL to inhibit this and
+  ;; prevent a repeat invocation.  See elisp/lispref page "Search-based
+  ;; Fontification".
+  (when c-warn-ids-with-dollar
+    (let (id-start)
+      (while (and (< (point) limit)
+		  (skip-chars-forward "^$" limit)
+		  (< (point) limit)
+		  (eq (char-after) ?$))
+	(if (and (memq (c-get-char-property (point) 'face)
+		       '(font-lock-variable-name-face
+			 font-lock-function-name-face
+			 font-lock-type-face))
+		 (setq id-start (c-on-identifier)))
+	    (progn
+	      (goto-char id-start)
+	      (looking-at c-identifier-key)
+	      (c-put-font-lock-face (match-beginning 0) (match-end 0)
+				    'font-lock-warning-face)
+	      (goto-char (match-end 0)))
+	  (forward-char)))
+      nil)))
+
 (defun c-font-lock-ml-strings (limit)
   ;; Fontify multi-line strings.
   ;;
@@ -2275,7 +2308,7 @@ on level 2 only and so aren't combined with `c-complex-decl-matchers'."
 		     (c-forward-syntactic-ws))
 		   (goto-char (match-end ,type-match))))))))
 
-      ;; Fontify special declarations that lacks a type.
+      ;; Fontify special declarations that lack a type.
       ,@(when (c-lang-const c-typeless-decl-kwds)
 	  `((,(c-make-font-lock-search-function
 	       (concat "\\<\\("
@@ -2289,7 +2322,12 @@ on level 2 only and so aren't combined with `c-complex-decl-matchers'."
 
       ;; Fontify generic colon labels in languages that support them.
       ,@(when (c-lang-const c-recognize-colon-labels)
-	  '(c-font-lock-labels))))
+	  '(c-font-lock-labels))
+
+      ;; Maybe fontify identifiers containing a dollar sign with
+      ;; `font-lock-warning-face'.
+      ,@(when (c-lang-const c-dollar-in-ids)
+	  `(c-font-lock-ids-with-dollar))))
 
 (c-lang-defconst c-complex-decl-matchers
   "Complex font lock matchers for types and declarations.  Used on level
@@ -2365,7 +2403,11 @@ on level 2 only and so aren't combined with `c-complex-decl-matchers'."
 	  ;; (see Elisp page "Search-based Fontification").
 	  '(("\\<new\\>"
 	     (c-font-lock-c++-new))))
-      ))
+
+      ;; Maybe fontify identifiers containing a dollar sign with
+      ;; `font-lock-warning-face'.
+      ,@(when (c-lang-const c-dollar-in-ids)
+	  `(c-font-lock-ids-with-dollar))))
 
 (defun c-font-lock-labels (limit)
   ;; Fontify all statement labels from the point to LIMIT.  Assumes
@@ -2658,7 +2700,9 @@ need for `c-font-lock-extra-types'.")
   ;; prevent a repeat invocation.  See elisp/lispref page "Search-based
   ;; fontification".
   (let (pos)
-    (while (c-syntactic-re-search-forward c-using-key limit 'end)
+    (while
+	(and (< (point) limit)
+	     (c-syntactic-re-search-forward c-using-key limit 'end))
       (while  ; Do one declarator of a comma separated list, each time around.
 	  (progn
 	    (c-forward-syntactic-ws)
@@ -2678,9 +2722,7 @@ need for `c-font-lock-extra-types'.")
 			   'same)
 		       (looking-at c-colon-type-list-re)))
 		;; Inherited protected member: leave unfontified
-		)
-	       (t (goto-char pos)
-		  (c-font-lock-declarators limit nil c-label-face-name nil)))
+		))
 	      (eq (char-after) ?,)))
 	(forward-char)))		; over the comma.
     nil))

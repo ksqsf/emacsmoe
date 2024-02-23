@@ -1,6 +1,6 @@
 /* Header file for the tree-sitter integration.
 
-Copyright (C) 2021-2023 Free Software Foundation, Inc.
+Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -34,13 +34,21 @@ INLINE_HEADER_BEGIN
 struct Lisp_TS_Parser
 {
   union vectorlike_header header;
-  /* A symbol representing the language this parser uses.  See the
+    /* A symbol representing the language this parser uses.  See the
      manual for more explanation.  */
   Lisp_Object language_symbol;
   /* A list of functions to call after re-parse.  Every function is
      called with the changed ranges and the parser.  The changed
      ranges is a list of (BEG . END).  */
   Lisp_Object after_change_functions;
+  /* A tag (symbol) for the parser.  Different parsers can have the
+     same tag.  A tag is primarily used to differentiate between
+     parsers for the same language.  */
+  Lisp_Object tag;
+  /* The Lisp ranges last set.  This is use to compare to the new
+     ranges the users wants to set, and avoid reparse if the new
+     ranges is the same as the last set one.  */
+  Lisp_Object last_set_ranges;
   /* The buffer associated with this parser.  */
   Lisp_Object buffer;
   /* The pointer to the tree-sitter parser.  Never NULL.  */
@@ -53,7 +61,9 @@ struct Lisp_TS_Parser
   /* Re-parsing an unchanged buffer is not free for tree-sitter, so we
      only make it re-parse when need_reparse == true.  That usually
      means some change is made in the buffer.  But others could set
-     this field to true to force tree-sitter to re-parse.  */
+     this field to true to force tree-sitter to re-parse.  When you
+     set this to true, you should _always_ also increment
+     timestamp.  */
   bool need_reparse;
   /* These two positions record the buffer byte position (1-based) of
      the "visible region" that tree-sitter sees.  Before re-parse, we
@@ -72,9 +82,6 @@ struct Lisp_TS_Parser
   /* If this field is true, parser functions raises
      treesit-parser-deleted signal.  */
   bool deleted;
-  /* If this field is true, the parser has ranges set.  See
-     Ftreesit_parser_included_ranges for why we need this.  */
-  bool has_range;
 };
 
 /* A wrapper around a tree-sitter node.  */
@@ -183,7 +190,7 @@ INLINE_HEADER_END
 
 extern void treesit_record_change (ptrdiff_t, ptrdiff_t, ptrdiff_t);
 extern Lisp_Object make_treesit_parser (Lisp_Object, TSParser *, TSTree *,
-					Lisp_Object);
+					Lisp_Object, Lisp_Object);
 extern Lisp_Object make_treesit_node (Lisp_Object, TSNode);
 
 extern bool treesit_node_uptodate_p (Lisp_Object);

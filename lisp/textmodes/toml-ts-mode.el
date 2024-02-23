@@ -1,6 +1,6 @@
 ;;; toml-ts-mode.el --- tree-sitter support for TOML  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2024 Free Software Foundation, Inc.
 
 ;; Author     : Jostein Kjønigsen <jostein@kjonigsen.net>
 ;; Maintainer : Jostein Kjønigsen <jostein@kjonigsen.net>
@@ -39,8 +39,8 @@
 (defcustom toml-ts-mode-indent-offset 2
   "Number of spaces for each indentation step in `toml-ts-mode'."
   :version "29.1"
-  :type 'integer
-  :safe 'integerp
+  :type 'natnum
+  :safe 'natnump
   :group 'toml)
 
 (defvar toml-ts-mode--syntax-table

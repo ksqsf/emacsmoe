@@ -1,6 +1,6 @@
 ;;; rmail.el --- main code of "RMAIL" mail reader for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1988, 1993-1998, 2000-2023 Free Software
+;; Copyright (C) 1985-1988, 1993-1998, 2000-2024 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -40,6 +40,7 @@
 (require 'mail-utils)
 (require 'rfc2047)
 (require 'auth-source)
+(require 'rfc6068)
 
 (declare-function compilation--message->loc "compile" (cl-x) t)
 (declare-function epa--find-coding-system-for-mime-charset "epa" (mime-charset))
@@ -89,7 +90,6 @@
 its character representation and its display representation.")
 
 (defvar deleted-head)
-(defvar font-lock-fontified)
 (defvar mail-abbrev-syntax-table)
 (defvar mail-abbrevs)
 (defvar messages-head)
@@ -263,7 +263,7 @@ Otherwise, look for `movemail' in the directories in
 	  ;; assuming it would work.
 	  ;; https://lists.gnu.org/r/bug-gnu-emacs/2008-02/msg00087.html
 	  (let ((progname (expand-file-name
-			   (concat "movemail"
+			   (concat movemail-program-name
 				   (if (memq system-type '(ms-dos windows-nt))
 				       ".exe")) dir)))
 	    (when (and (not (file-directory-p progname))
@@ -1120,10 +1120,36 @@ The buffer is expected to be narrowed to just the header of the message."
     (define-key map [menu-bar mail]
       (cons "Mail" (make-sparse-keymap "Mail")))
 
+    (define-key map [menu-bar mail mailing-list]
+      (cons "Mailing List" (make-sparse-keymap "Mailing List")))
+
+    (define-key map [menu-bar mail mailing-list list-help]
+      '(menu-item "Mailing List Help" rmail-mailing-list-help
+                  :enable (rmail-get-header "List-Help")
+                  :help "Compose email requesting help about this mailing list"))
+
+    (define-key map [menu-bar mail mailing-list list-archive]
+      '(menu-item "Mailing List Archive" rmail-mailing-list-archive
+                  :enable (rmail-get-header "List-Archive")
+                  :help "Browse the archive of this mailing list"))
+
+    (define-key map [menu-bar mail mailing-list list-unsubscribe]
+      '(menu-item "Unsubscribe From List" rmail-mailing-list-unsubscribe
+                  :enable (rmail-get-header "List-Unsubscribe")
+                  :help "Compose email to unsubscribe from this mailing list"))
+
+    (define-key map [menu-bar mail mailing-list list-post]
+      '(menu-item "Post To List" rmail-mailing-list-post
+                  :enable (rmail-get-header "List-Post")
+                  :help "Compose email to post to this mailing list"))
+
+    (define-key map [menu-bar mail lambda1]
+      '("----"))
+
     (define-key map [menu-bar mail rmail-get-new-mail]
       '("Get New Mail" . rmail-get-new-mail))
 
-    (define-key map [menu-bar mail lambda]
+    (define-key map [menu-bar mail lambda2]
       '("----"))
 
     (define-key map [menu-bar mail continue]
@@ -1989,7 +2015,9 @@ Value is the size of the newly read mail after conversion."
 		 (buffer-disable-undo errors)
 		 (let ((args
 			(append
-			 (list (or rmail-movemail-program "movemail") nil errors nil)
+			 (list (or rmail-movemail-program
+                                   movemail-program-name)
+                               nil errors nil)
 			 (if rmail-preserve-inbox
 			     (list "-p")
 			   nil)
@@ -2285,7 +2313,7 @@ significant attribute change was made."
             (insert value)))
       ;; Otherwise add a header line to record the attributes and set
       ;; all but this one to no.
-      (let ((header-value "--------"))
+      (let ((header-value (copy-sequence "--------")))
         (aset header-value attr value)
         (goto-char (if limit (1- limit) (point-max)))
         (setq altered (/= value ?-))
@@ -2684,7 +2712,9 @@ N defaults to the current message."
 	  (and (string-match text-regexp content-type-header) t)))))
 
 (defcustom rmail-show-message-verbose-min 200000
-  "Message size at which to show progress messages for displaying it."
+  "Message size at which to show progress messages for displaying it.
+Messages longer than this (in characters) will produce echo-area
+messages when Rmail processes such a message for display."
   :type 'integer
   :group 'rmail
   :version "23.1")
@@ -4067,7 +4097,7 @@ typically for purposes of moderating a list."
 		  (let ((end (point-marker))
 			(local-abbrev-table mail-abbrevs)
 			(old-syntax-table (syntax-table)))
-		    (if (and (not (vectorp mail-abbrevs))
+		    (if (and (not (obarrayp mail-abbrevs))
 			     (file-exists-p mail-personal-alias-file))
 			(build-mail-abbrevs))
 		    (unless mail-abbrev-syntax-table
@@ -4583,6 +4613,16 @@ Argument MIME is non-nil if this is a mime message."
     ;; Decode any base64-encoded material in what we just decrypted.
     (rmail-epa-decode armor-start after-end)
 
+    ;; If this is in a MIME part, convert CRLF into just LF (newline)
+    (when mime
+      (save-restriction
+        (narrow-to-region armor-start  (- (point-max) after-end))
+        (goto-char (point-min))
+        (let ((inhibit-read-only t))
+          (while (search-forward "\r\n" nil t)
+            (delete-region (- (point) 2) (- (point) 1)))))
+      )
+
     (list armor-start (- (point-max) after-end) mime
           armor-end-regexp
           (buffer-substring armor-start (- (point-max) after-end)))))
@@ -4626,7 +4666,33 @@ Argument MIME is non-nil if this is a mime message."
 	      (push (rmail-epa-decrypt-1 mime) decrypts))))
 
       (when (and decrypts (rmail-buffers-swapped-p))
-	(when (y-or-n-p "Replace the original message? ")
+	(if (not (y-or-n-p "Replace the original message? "))
+            ;; User wants to decrypt only temporarily.
+	    ;; Find, in the view buffer, the armors
+	    ;; that we made decrypts for, and replace each one
+            ;; with its decrypt.  In a mime part, replace CRLF with NL.
+            (dolist (d decrypts)
+	      (if (re-search-forward "-----BEGIN PGP MESSAGE-----$" nil t)
+		  (let (armor-start armor-end armor-end-regexp)
+		    (setq armor-start (match-beginning 0)
+			  armor-end-regexp (nth 3 d)
+			  armor-end (re-search-forward
+				     armor-end-regexp
+				     nil t))
+
+		    ;; Found as expected -- now replace it with the decrypt.
+		    (when armor-end
+                      (if (null (nth 2 d))
+                          nil
+                        ;; In a mime part --
+                        ;; replace CRLF with NL in it.
+                        (save-restriction
+                          (narrow-to-region armor-start armor-end)
+                          (goto-char (point-min))
+                          (while (search-forward "\r\n" nil t)
+                            (delete-region (- (point) 2) (- (point) 1))))))
+		      )))
+          ;; User wants to decrypt the message permanently.
           (when (eq major-mode 'rmail-mode)
             (rmail-add-label "decrypt"))
 	  (setq decrypts (nreverse decrypts))
@@ -4765,6 +4831,69 @@ Content-Transfer-Encoding: base64\n")
 	(setq buffer-file-coding-system rmail-message-encoding))))
 (add-hook 'after-save-hook 'rmail-after-save-hook)
 
+
+;;; Mailing list support
+(defun rmail--mailing-list-message (which)
+  "Send a message to mailing list whose purpose is identified by WHICH.
+WHICH is a symbol, one of `help', `unsubscribe', or `post'."
+  (let ((header
+         (cond ((eq which 'help) "List-Help")
+               ((eq which 'unsubscribe) "List-Unsubscribe")
+               ((eq which 'post) "List-Post")))
+        (msg
+         (cond ((eq which 'post)
+                "Write Subject and body, then type \\[%s] to send the message.")
+               (t
+                "Type \\[%s] to send the message.")))
+        address header-list to subject)
+    (setq address (rmail-get-header header))
+    (cond ((and address (string-match "<\\(mailto:[^>]*\\)>" address))
+           (setq address (match-string 1 address))
+           (setq header-list (rfc6068-parse-mailto-url address)
+                 to (cdr (assoc-string "To" header-list t))
+                 subject (or (cdr (assoc-string "Subject" header-list t)) ""))
+           (rmail-start-mail nil to subject nil nil rmail-buffer)
+           (message (substitute-command-keys
+                     (format msg (get mail-user-agent 'sendfunc)))))
+          (t
+           (user-error "This message does not specify \"%s\" address"
+                       header)))))
+
+(defun rmail-mailing-list-help ()
+  "Send Help request to the mailing list which delivered the current message.
+This command starts composing an email message to the mailing list
+requesting help about the list.  When the message is ready, send it
+as usual, via your MUA's send-email command."
+  (interactive nil rmail-mode)
+  (rmail--mailing-list-message 'help))
+
+(defun rmail-mailing-list-post ()
+  "Post a message to the mailing list which delivered the current message.
+This command starts composing an email message to the mailing list.
+Fill the Subject and the body of the message.  When the message is
+ready, send it as usual, via your MUA's send-email command."
+  (interactive nil rmail-mode)
+  (rmail--mailing-list-message 'post))
+
+(defun rmail-mailing-list-unsubscribe ()
+  "Send unsubscribe request to the mailing list which delivered current message.
+This command starts composing an email message to the mailing list
+requesting to unsubscribe you from the list.  When the message is
+ready, send it as usual, via your MUA's send-email command."
+  (interactive nil rmail-mode)
+  (rmail--mailing-list-message 'unsubscribe))
+
+(defun rmail-mailing-list-archive ()
+  "Browse the archive of the mailing list which delivered the current message."
+  (interactive nil rmail-mode)
+  (let* ((header (rmail-get-header "List-Archive"))
+         (url (and (stringp header)
+                   (string-match " *<\\([^>]*\\)>" header)
+                   (match-string 1 header))))
+    (if url
+        (browse-url url)
+      (user-error
+       "This message does not specify a valid \"List-Archive\" URL"))))
 
 (provide 'rmail)
 

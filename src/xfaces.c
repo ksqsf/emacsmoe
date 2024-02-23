@@ -1,6 +1,6 @@
 /* xfaces.c -- "Face" primitives.
 
-Copyright (C) 1993-1994, 1998-2023 Free Software Foundation, Inc.
+Copyright (C) 1993-1994, 1998-2024 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -257,6 +257,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #ifdef HAVE_HAIKU
 #define GCGraphicsExposures 0
 #endif /* HAVE_HAIKU */
+
+#ifdef HAVE_ANDROID
+#define GCGraphicsExposures 0
+#endif /* HAVE_ANDROID */
 #endif /* HAVE_WINDOW_SYSTEM */
 
 #include "buffer.h"
@@ -292,15 +296,15 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 /* True if face attribute ATTR is unspecified.  */
 
-#define UNSPECIFIEDP(ATTR) EQ ((ATTR), Qunspecified)
+#define UNSPECIFIEDP(ATTR) EQ (ATTR, Qunspecified)
 
 /* True if face attribute ATTR is `ignore-defface'.  */
 
-#define IGNORE_DEFFACE_P(ATTR) EQ ((ATTR), QCignore_defface)
+#define IGNORE_DEFFACE_P(ATTR) EQ (ATTR, QCignore_defface)
 
 /* True if face attribute ATTR is `reset'.  */
 
-#define RESET_P(ATTR) EQ ((ATTR), Qreset)
+#define RESET_P(ATTR) EQ (ATTR, Qreset)
 
 /* Size of hash table of realized faces in face caches (should be a
    prime number).  */
@@ -609,6 +613,39 @@ x_free_gc (struct frame *f, Emacs_GC *gc)
   xfree (gc);
 }
 #endif  /* HAVE_NS */
+
+#ifdef HAVE_ANDROID
+
+/* Android real GCs.  */
+
+static struct android_gc *
+x_create_gc (struct frame *f, unsigned long value_mask,
+	     Emacs_GC *xgcv)
+{
+  struct android_gc_values gcv;
+  unsigned long mask;
+
+  gcv.foreground = xgcv->foreground;
+  gcv.background = xgcv->background;
+
+  mask = 0;
+
+  if (value_mask & GCForeground)
+    mask |= ANDROID_GC_FOREGROUND;
+
+  if (value_mask & GCBackground)
+    mask |= ANDROID_GC_BACKGROUND;
+
+  return android_create_gc (mask, &gcv);
+}
+
+static void
+x_free_gc (struct frame *f, struct android_gc *gc)
+{
+  android_free_gc (gc);
+}
+
+#endif
 
 /***********************************************************************
 			   Frames and faces
@@ -1578,7 +1615,7 @@ the face font sort order, see `face-font-selection-order'.  */)
     {
       Lisp_Object font = AREF (vec, i);
       int point = PIXEL_TO_POINT (XFIXNUM (AREF (font, FONT_SIZE_INDEX)) * 10,
-				  FRAME_RES_Y (f));
+				  FRAME_RES (f));
       Lisp_Object spacing = Ffont_get (font, QCspacing);
       Lisp_Object v = CALLN (Fvector,
 			     AREF (font, FONT_FAMILY_INDEX),
@@ -1595,7 +1632,7 @@ the face font sort order, see `face-font-selection-order'.  */)
 					  make_fixnum
 					  (FONT_SPACING_PROPORTIONAL)))
 			     ? Qnil : Qt,
-			     Ffont_xlfd_name (font, Qnil),
+			     Ffont_xlfd_name (font, Qnil, Qt),
 			     AREF (font, FONT_REGISTRY_INDEX));
       result = Fcons (v, result);
     }
@@ -1704,7 +1741,7 @@ the WIDTH times as wide as FACE on FRAME.  */)
 	  ASET (font_entity, FONT_SIZE_INDEX,
 		AREF (font_spec, FONT_SIZE_INDEX));
 	}
-      XSETCAR (tail, Ffont_xlfd_name (font_entity, Qnil));
+      XSETCAR (tail, Ffont_xlfd_name (font_entity, Qnil, Qt));
     }
   if (NILP (frame))
     /* We don't have to check fontsets.  */
@@ -1727,7 +1764,7 @@ the WIDTH times as wide as FACE on FRAME.  */)
 #define LFACE_HEIGHT(LFACE)	    AREF ((LFACE), LFACE_HEIGHT_INDEX)
 #define LFACE_WEIGHT(LFACE)	    AREF ((LFACE), LFACE_WEIGHT_INDEX)
 #define LFACE_SLANT(LFACE)	    AREF ((LFACE), LFACE_SLANT_INDEX)
-#define LFACE_SHADOW(LFACE)         AREF((LFACE), LFACE_SHADOW_INDEX)
+#define LFACE_SHADOW(LFACE)         AREF ((LFACE), LFACE_SHADOW_INDEX)
 #define LFACE_UNDERLINE(LFACE)      AREF ((LFACE), LFACE_UNDERLINE_INDEX)
 #define LFACE_INVERSE(LFACE)	    AREF ((LFACE), LFACE_INVERSE_INDEX)
 #define LFACE_FOREGROUND(LFACE)     AREF ((LFACE), LFACE_FOREGROUND_INDEX)
@@ -1742,7 +1779,7 @@ the WIDTH times as wide as FACE on FRAME.  */)
 #define LFACE_FONTSET(LFACE)	    AREF ((LFACE), LFACE_FONTSET_INDEX)
 #define LFACE_EXTEND(LFACE)	    AREF ((LFACE), LFACE_EXTEND_INDEX)
 #define LFACE_DISTANT_FOREGROUND(LFACE) \
-  AREF ((LFACE), LFACE_DISTANT_FOREGROUND_INDEX)
+  AREF (LFACE, LFACE_DISTANT_FOREGROUND_INDEX)
 
 /* True if LFACE is a Lisp face.  A Lisp face is a vector of size
    LFACE_VECTOR_SIZE which has the symbol `face' in slot 0.  */
@@ -2140,7 +2177,7 @@ set_lface_from_font (struct frame *f, Lisp_Object lface,
 
   if (force_p || UNSPECIFIEDP (LFACE_HEIGHT (lface)))
     {
-      int pt = PIXEL_TO_POINT (font->pixel_size * 10, FRAME_RES_Y (f));
+      int pt = PIXEL_TO_POINT (font->pixel_size * 10, FRAME_RES (f));
 
       eassert (pt > 0);
       ASET (lface, LFACE_HEIGHT_INDEX, make_fixnum (pt));
@@ -2199,7 +2236,7 @@ merge_face_heights (Lisp_Object from, Lisp_Object to, Lisp_Object invalid)
     {
       /* Call function with current height as argument.
 	 From is the new height.  */
-      result = safe_call1 (from, to);
+      result = safe_calln (from, to);
 
       /* Ensure that if TO was absolute, so is the result.  */
       if (FIXNUMP (to) && !FIXNUMP (result))
@@ -2212,20 +2249,20 @@ merge_face_heights (Lisp_Object from, Lisp_Object to, Lisp_Object invalid)
 
 /* Merge two Lisp face attribute vectors on frame F, FROM and TO, and
    store the resulting attributes in TO, which must be already be
-   completely specified and contain only absolute attributes.
-   Every specified attribute of FROM overrides the corresponding
-   attribute of TO; relative attributes in FROM are merged with the
-   absolute value in TO and replace it.  NAMED_MERGE_POINTS is used
-   internally to detect loops in face inheritance/remapping; it should
-   be 0 when called from other places.  If window W is non-NULL, use W
-   to interpret face specifications. */
+   completely specified and contain only absolute attributes.  Every
+   specified attribute of FROM overrides the corresponding attribute of
+   TO; merge relative attributes in FROM with the absolute value in TO,
+   which attributes also replace it.  Use NAMED_MERGE_POINTS internally
+   to detect loops in face inheritance/remapping; it should be 0 when
+   called from other places.  If window W is non-NULL, use W to
+   interpret face specifications. */
 static void
 merge_face_vectors (struct window *w,
 		    struct frame *f, const Lisp_Object *from, Lisp_Object *to,
                     struct named_merge_point *named_merge_points)
 {
   int i;
-  Lisp_Object font = Qnil;
+  Lisp_Object font = Qnil, tospec, adstyle;
 
   /* If FROM inherits from some other faces, merge their attributes into
      TO before merging FROM's direct attributes.  Note that an :inherit
@@ -2285,6 +2322,25 @@ merge_face_vectors (struct window *w,
 	to[LFACE_SLANT_INDEX] = FONT_SLANT_FOR_FACE (font);
       if (! NILP (AREF (font, FONT_WIDTH_INDEX)))
 	to[LFACE_SWIDTH_INDEX] = FONT_WIDTH_FOR_FACE (font);
+
+      if (!NILP (AREF (font, FONT_ADSTYLE_INDEX)))
+	{
+	  /* If an adstyle is specified in FROM's font spec, create a
+	     font spec for TO if none exists, and transfer the adstyle
+	     there.  */
+
+	  tospec = to[LFACE_FONT_INDEX];
+	  adstyle = AREF (font, FONT_ADSTYLE_INDEX);
+
+	  if (!NILP (tospec))
+	    tospec = copy_font_spec (tospec);
+	  else
+	    tospec = Ffont_spec (0, NULL);
+
+	  to[LFACE_FONT_INDEX] = tospec;
+	  ASET (tospec, FONT_ADSTYLE_INDEX, adstyle);
+	}
+
       ASET (font, FONT_SIZE_INDEX, Qnil);
     }
 
@@ -3378,12 +3434,13 @@ FRAME 0 means change the face on all frames, and change the default
 	      if (!CONSP (tem))
 		break;
 	      v = XCAR (tem);
-	      tem = XCDR (tem);
 
 	      if (EQ (k, QCline_width))
 		{
-		  if ((!CONSP(v) || !FIXNUMP (XCAR (v)) || XFIXNUM (XCAR (v)) == 0
-		                 || !FIXNUMP (XCDR (v)) || XFIXNUM (XCDR (v)) == 0)
+		  if ((!CONSP(v)
+		       || !FIXNUMP (XCAR (v))
+		       || XFIXNUM (XCAR (v)) == 0
+		       || !FIXNUMP (XCDR (v)) || XFIXNUM (XCDR (v)) == 0)
 		      && (!FIXNUMP (v) || XFIXNUM (v) == 0))
 		    break;
 		}
@@ -3394,12 +3451,16 @@ FRAME 0 means change the face on all frames, and change the default
 		}
 	      else if (EQ (k, QCstyle))
 		{
-		  if (!EQ (v, Qpressed_button) && !EQ (v, Qreleased_button)
-		      && !EQ(v, Qflat_button))
+		  if (!NILP (v)
+		      && !EQ (v, Qpressed_button)
+		      && !EQ (v, Qreleased_button)
+		      && !EQ (v, Qflat_button))
 		    break;
 		}
 	      else
 		break;
+
+	      tem = XCDR (tem);
 	    }
 
 	  valid_p = NILP (tem);
@@ -4025,7 +4086,8 @@ x_update_menu_appearance (struct frame *f)
 	      || !UNSPECIFIEDP (LFACE_SLANT (lface))
 	      || !UNSPECIFIEDP (LFACE_HEIGHT (lface))))
 	{
-	  Lisp_Object xlfd = Ffont_xlfd_name (LFACE_FONT (lface), Qnil);
+	  Lisp_Object xlfd = Ffont_xlfd_name (LFACE_FONT (lface), Qnil,
+					      Qnil);
 #ifdef USE_MOTIF
 	  const char *suffix = "List";
 	  bool motif = true;
@@ -6752,7 +6814,7 @@ face_at_buffer_position (struct window *w, ptrdiff_t pos,
   /* Get the `face' or `mouse_face' text property at POS, and
      determine the next position at which the property changes.  */
   prop = Fget_text_property (position, propname, w->contents);
-  XSETFASTINT (limit1, (limit < endpos ? limit : endpos));
+  XSETFASTINT (limit1, min (limit, endpos));
   end = Fnext_single_property_change (position, propname, w->contents, limit1);
   if (FIXNUMP (end))
     endpos = XFIXNUM (end);
@@ -6888,7 +6950,7 @@ face_for_overlay_string (struct window *w, ptrdiff_t pos,
   /* Get the `face' or `mouse_face' text property at POS, and
      determine the next position at which the property changes.  */
   prop = Fget_text_property (position, propname, w->contents);
-  XSETFASTINT (limit1, (limit < endpos ? limit : endpos));
+  XSETFASTINT (limit1, min (limit, endpos));
   end = Fnext_single_property_change (position, propname, w->contents, limit1);
   if (FIXNUMP (end))
     endpos = XFIXNUM (end);
@@ -7101,20 +7163,22 @@ where R,G,B are numbers between 0 and 255 and name is an arbitrary string.  */)
       int num;
 
       while (fgets (buf, sizeof (buf), fp) != NULL)
-	if (sscanf (buf, "%d %d %d %n", &red, &green, &blue, &num) == 3)
-	  {
+	{
+	  if (sscanf (buf, "%d %d %d %n", &red, &green, &blue, &num) == 3)
+	    {
 #ifdef HAVE_NTGUI
-	    int color = RGB (red, green, blue);
+	      int color = RGB (red, green, blue);
 #else
-	    int color = (red << 16) | (green << 8) | blue;
+	      int color = (red << 16) | (green << 8) | blue;
 #endif
-	    char *name = buf + num;
-	    ptrdiff_t len = strlen (name);
-	    len -= 0 < len && name[len - 1] == '\n';
-	    cmap = Fcons (Fcons (make_string (name, len), make_fixnum (color)),
-			  cmap);
-	  }
-      fclose (fp);
+	      char *name = buf + num;
+	      ptrdiff_t len = strlen (name);
+	      len -= 0 < len && name[len - 1] == '\n';
+	      cmap = Fcons (Fcons (make_string (name, len), make_fixnum (color)),
+			    cmap);
+	    }
+	}
+      emacs_fclose (fp);
     }
   unblock_input ();
   return cmap;
@@ -7438,8 +7502,7 @@ only for this purpose.  */);
     doc: /* Hash table of global face definitions (for internal use only.)  */);
   Vface_new_frame_defaults =
     /* 33 entries is enough to fit all basic faces */
-    make_hash_table (hashtest_eq, 33, DEFAULT_REHASH_SIZE,
-                     DEFAULT_REHASH_THRESHOLD, Qnil, false);
+    make_hash_table (&hashtest_eq, 33, Weak_None, false);
 
   DEFVAR_LISP ("face-default-stipple", Vface_default_stipple,
     doc: /* Default stipple pattern used on monochrome displays.

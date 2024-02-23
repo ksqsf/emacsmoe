@@ -1,6 +1,6 @@
 ;;; fontset.el --- commands for handling fontset  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997-2023 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2024 Free Software Foundation, Inc.
 ;; Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
 ;;   2005, 2006, 2007, 2008, 2009, 2010, 2011
 ;;   National Institute of Advanced Industrial Science and Technology (AIST)
@@ -200,7 +200,10 @@
 	(symbol . [#x201C #x2200 #x2500])
 	(braille #x2800)
 	(ideographic-description #x2FF0)
-	(cjk-misc #x300E)
+        ;; Noto Sans Phags Pa is broken and reuses the CJK misc code
+        ;; points for some of its own characters.  Add one actual CJK
+        ;; character to prevent finding such broken fonts.
+	(cjk-misc #x300E #xff0c #x300a #xff09 #x5b50)
 	(kana #x304B)
 	(bopomofo #x3105)
 	(kanbun #x319D)
@@ -642,17 +645,27 @@
 	       (nil . "microsoft-cp1251")
 	       (nil . "koi8-r"))
 
-     (arabic ,(font-spec :registry "iso10646-1"
-			 :otf '(arab nil (init medi fina liga)))
+     (arabic ,(if (featurep 'android)
+                  ;; The Android font driver does not support the
+                  ;; detection of OTF tags but all fonts installed on
+                  ;; Android with Arabic characters provide shaping
+                  ;; information required for displaying Arabic text.
+                  (font-spec :registry "iso10646-1" :script 'arabic)
+                (font-spec :registry "iso10646-1"
+			   :otf '(arab nil (init medi fina liga))))
 	     (nil . "MuleArabic-0")
 	     (nil . "MuleArabic-1")
 	     (nil . "MuleArabic-2")
 	     (nil . "ISO8859-6"))
+     (mongolian ,(font-spec :registry "iso10646-1"
+			    :otf '(mong nil (init medi fina isol))))
 
      (hebrew ,(font-spec :registry "iso10646-1" :script 'hebrew)
 	     (nil . "ISO8859-8"))
 
-     (khmer ,(font-spec :registry "iso10646-1" :otf '(khmr nil (pres))))
+     (khmer ,(if (featurep 'android)
+                 (font-spec :registry "iso10646-1" :script 'khmer)
+               (font-spec :registry "iso10646-1" :otf '(khmr nil (pres)))))
 
      (kana (nil . "JISX0208*")
 	   (nil . "GB2312.1980-0")
@@ -683,7 +696,11 @@
 	  (nil . "JISX0213.2000-2")
 	  (nil . "JISX0213.2004-1")
 	  ,(font-spec :registry "iso10646-1" :lang 'ja)
-	  ,(font-spec :registry "iso10646-1" :lang 'zh))
+	  ,(font-spec :registry "iso10646-1" :lang 'zh)
+          ;; This is required, as otherwise many TrueType fonts with
+          ;; CJK characters but no corresponding ``design language''
+          ;; declaration can't be found.
+          ,(font-spec :registry "iso10646-1" :script 'han))
 
      (cjk-misc (nil . "GB2312.1980-0")
 	       (nil . "JISX0208*")
@@ -702,7 +719,11 @@
 	       (nil . "JISX0213.2000-1")
 	       (nil . "JISX0213.2000-2")
 	       ,(font-spec :registry "iso10646-1" :lang 'ja)
-	       ,(font-spec :registry "iso10646-1" :lang 'zh))
+	       ,(font-spec :registry "iso10646-1" :lang 'zh)
+               ;; This is required, as otherwise many TrueType fonts
+               ;; with CJK characters but no corresponding ``design
+               ;; language'' declaration can't be found.
+               ,(font-spec :registry "iso10646-1" :script 'cjk-misc))
 
      (hangul (nil . "KSC5601.1987-0")
 	     ,(font-spec :registry "iso10646-1" :lang 'ko))
@@ -1194,7 +1215,8 @@ Internal use only.  Should be called at startup time."
       (list (cons (purecopy "-cdac$")  1.3)))
 
 (defvar x-font-name-charset-alist nil
-  "This variable has no meaning now.  Just kept for backward compatibility.")
+  "This variable has no meaning starting with Emacs 22.1.")
+(make-obsolete-variable 'x-font-name-charset-alist nil "30.1")
 
 ;;; XLFD (X Logical Font Description) format handler.
 
@@ -1260,9 +1282,8 @@ Return nil if PATTERN doesn't conform to XLFD."
 (defun x-compose-font-name (fields &optional _reduce)
   "Compose X fontname from FIELDS.
 FIELDS is a vector of XLFD fields, of length 12.
-If a field is nil, wild-card letter `*' is embedded.
-Optional argument REDUCE exists just for backward compatibility,
-and is always ignored."
+If a field is nil, wild-card letter `*' is embedded."
+  (declare (advertised-calling-convention (fields) "30.1"))
   (concat "-" (mapconcat (lambda (x) (or x "*")) fields "-")))
 
 
