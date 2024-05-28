@@ -3671,8 +3671,7 @@ Treats actions as defuns."
 	(remove-hook 'after-save-hook #'gdb-create-define-alist t))))
 
 (defcustom gud-tooltip-modes '( gud-mode c-mode c++-mode fortran-mode
-				python-mode c-ts-mode c++-ts-mode
-                                python-ts-mode)
+				python-mode)
   "List of modes for which to enable GUD tooltips."
   :type '(repeat (symbol :tag "Major mode"))
   :group 'tooltip)
@@ -3708,10 +3707,9 @@ only tooltips in the buffer containing the overlay arrow."
 	       #'gud-tooltip-activate-mouse-motions-if-enabled)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (if (and gud-tooltip-mode
-	       (memq major-mode gud-tooltip-modes))
-	  (gud-tooltip-activate-mouse-motions t)
-	(gud-tooltip-activate-mouse-motions nil)))))
+     (gud-tooltip-activate-mouse-motions
+      (and gud-tooltip-mode
+	       (derived-mode-p gud-tooltip-modes))))))
 
 (defvar gud-tooltip-mouse-motions-active nil
   "Locally t in a buffer if tooltip processing of mouse motion is enabled.")
@@ -3856,12 +3854,12 @@ so they have been disabled."))
 		expr))))))))
 
 
-;; 'gud-lldb-history' and 'gud-gud-lldb-command-name' are required
+;; 'gud-lldb-history' and 'gud-lldb-command-name' are required
 ;; because 'gud-symbol' uses their values if they are present.  Their
 ;; names are deduced from the minor-mode name.
 (defvar gud-lldb-history nil)
 
-(defcustom gud-gud-lldb-command-name "lldb"
+(defcustom gud-lldb-command-name "lldb"
   "Default command to invoke LLDB in order to debug a program with it."
   :type 'string
   :version "30.1")
@@ -4059,15 +4057,6 @@ consider to turn them off in this mode.
 
 This command runs functions from `lldb-mode-hook'."
   (interactive (list (gud-query-cmdline 'lldb)))
-
-  (when (and gud-comint-buffer
-	     (buffer-name gud-comint-buffer)
-	     (get-buffer-process gud-comint-buffer)
-	     (with-current-buffer gud-comint-buffer (eq gud-minor-mode 'gud-lldb)))
-    (gdb-restore-windows)
-    ;; FIXME: Copied from gud-gdb, but what does that even say?
-    (error "Multiple debugging requires restarting in text command mode"))
-
   (gud-common-init command-line nil 'gud-lldb-marker-filter)
   (setq-local gud-minor-mode 'lldb)
 
@@ -4076,7 +4065,7 @@ This command runs functions from `lldb-mode-hook'."
            "\C-b"
            "Set breakpoint at current line.")
   (gud-def gud-tbreak
-           "_regexp-break %f:%l"
+           "_regexp-tbreak %f:%l"
            "\C-t"
 	   "Set temporary breakpoint at current line.")
   (gud-def gud-remove

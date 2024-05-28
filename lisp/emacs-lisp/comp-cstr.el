@@ -38,12 +38,6 @@
 (require 'cl-lib)
 (require 'cl-extra) ;HACK: For `cl-find-class' when `cl-loaddefs' is missing.
 
-(defconst comp--typeof-builtin-types (mapcar (lambda (x)
-                                               (append x '(t)))
-                                             cl--typeof-types)
-  ;; TODO can we just add t in `cl--typeof-types'?
-  "Like `cl--typeof-types' but with t as common supertype.")
-
 (cl-defstruct (comp-cstr (:constructor comp--type-to-cstr
                                        (type &aux
 					     (null (eq type 'null))
@@ -89,32 +83,29 @@ Integer values are handled in the `range' slot.")
 
 (defun comp--cl-class-hierarchy (x)
   "Given a class name `x' return its hierarchy."
-  `(,@(cl--class-allparents (cl--struct-get-class x))
-    ;; FIXME: AFAICT, `comp--all-classes' will also find those struct types
-    ;; which use :type and can thus be either `vector' or `cons' (the latter
-    ;; isn't `atom').
-    atom
-    t))
+  (cl--class-allparents (cl--find-class x)))
 
 (defun comp--all-classes ()
   "Return all non built-in type names currently defined."
   (let (res)
     (mapatoms (lambda (x)
-                (when (cl-find-class x)
+                (when-let ((class (cl-find-class x))
+                           ;; Ignore EIEIO classes as they can be
+                           ;; redefined at runtime.
+                           (gate (not (eq 'eieio--class (type-of class)))))
                   (push x res)))
               obarray)
     res))
 
 (defun comp--compute-typeof-types ()
-  (append comp--typeof-builtin-types
-          (mapcar #'comp--cl-class-hierarchy (comp--all-classes))))
+  (mapcar #'comp--cl-class-hierarchy (comp--all-classes)))
 
 (defun comp--compute--pred-type-h ()
   (cl-loop with h = (make-hash-table :test #'eq)
 	   for class-name in (comp--all-classes)
            for pred = (get class-name 'cl-deftype-satisfies)
            when pred
-             do (puthash pred class-name h)
+           do (puthash pred (comp--type-to-cstr class-name) h)
 	   finally return h))
 
 (cl-defstruct comp-cstr-ctxt
@@ -240,20 +231,22 @@ Return them as multiple value."
 
 (defun comp-normalize-valset (valset)
   "Sort and remove duplicates from VALSET then return it."
-  (cl-sort (cl-remove-duplicates valset :test #'eq)
-           (lambda (x y)
-             (cond
-              ((and (symbolp x) (symbolp y))
-               (string< x y))
-              ((and (symbolp x) (not (symbolp y)))
-               t)
-              ((and (not (symbolp x)) (symbolp y))
-               nil)
-              ((or (consp x) (consp y)
-                   nil))
-              (t
-               (< (sxhash-equal x)
-                  (sxhash-equal y)))))))
+  ;; Sort valset as much as possible (by type and by value for symbols
+  ;; and strings) to increase cache hits.  But refrain to use
+  ;; `sxhash-equal' to be reproducible across on different builds.
+  (cl-loop
+   with vals = (cl-remove-duplicates valset :test #'eq)
+   with type-val = (cl-loop
+                    for type in (cl-remove-duplicates (mapcar #'cl-type-of vals)
+                                                      :test #'eq)
+                    collect (cons type nil))
+   for x in vals
+   do (push x (cdr (assq (cl-type-of x) type-val)))
+   finally return (cl-loop
+                   for (type . values) in (cl-sort type-val #'string< :key #'car)
+                   append (if (memq type '(symbol string))
+                              (cl-sort values #'string<)
+                            values))))
 
 (defun comp-union-valsets (&rest valsets)
   "Union values present into VALSETS."
@@ -272,18 +265,10 @@ Return them as multiple value."
                 (symbol-name y)))
 
 (defun comp--direct-supertypes (type)
-  "Return the direct supertypes of TYPE."
-  (let ((supers (comp-supertypes type)))
-    (cl-assert (eq type (car supers)))
-    (cl-loop
-     with notdirect = nil
-     with direct = nil
-     for parent in (cdr supers)
-     unless (memq parent notdirect)
-     do (progn
-          (push parent direct)
-          (setq notdirect (append notdirect (comp-supertypes parent))))
-     finally return direct)))
+  (when (symbolp type) ;; FIXME: Can this test ever fail?
+    (let* ((class (cl--find-class type))
+           (parents (if class (cl--class-parents class))))
+      (mapcar #'cl--class-name parents))))
 
 (defsubst comp-subtype-p (type1 type2)
   "Return t if TYPE1 is a subtype of TYPE2 or nil otherwise."
@@ -308,13 +293,10 @@ Return them as multiple value."
                             (apply #'append
                                    (mapcar #'comp--direct-supertypes typeset)))
                 for subs = (comp--direct-subtypes sup)
-                when (and (length> subs 1) ;;FIXME: Why?
-                          ;; Every subtype of `sup` is a subtype of
-                          ;; some element of `typeset`?
-                          ;; It's tempting to just check (member x typeset),
-                          ;; but think of the typeset (marker number),
-                          ;; where `sup' is `integer-or-marker' and `sub'
-                          ;; is `integer'.
+                when (and (length> subs 1) ;; If there's only one sub do
+                                           ;; nothing as we want to
+                                           ;; return the most specific
+                                           ;; type.
                           (cl-every (lambda (sub)
                                       (cl-some (lambda (type)
                                                  (comp-subtype-p sub type))
@@ -355,23 +337,8 @@ Return them as multiple value."
 
 (defun comp-supertypes (type)
   "Return the ordered list of supertypes of TYPE."
-  ;; FIXME: We should probably keep the results in
-  ;; `comp-cstr-ctxt-typeof-types' (or maybe even precompute them
-  ;; and maybe turn `comp-cstr-ctxt-typeof-types' into a hash-table).
-  ;; Or maybe we shouldn't keep structs and defclasses in it,
-  ;; and just use `cl--class-allparents' when needed (and refuse to
-  ;; compute their direct subtypes since we can't know them).
-  (cl-loop
-   named loop
-   with above
-   for lane in (comp-cstr-ctxt-typeof-types comp-ctxt)
-   do (let ((x (memq type lane)))
-        (cond
-         ((null x) nil)
-         ((eq x lane) (cl-return-from loop x)) ;A base type: easy case.
-         (t (setq above
-                  (if above (comp--intersection x above) x)))))
-   finally return above))
+  (or (assq type (comp-cstr-ctxt-typeof-types comp-ctxt))
+      (error "Type %S missing from typeof-types!" type)))
 
 (defun comp-union-typesets (&rest typesets)
   "Union types present into TYPESETS."
@@ -610,7 +577,7 @@ All SRCS constraints must be homogeneously negated or non-negated."
           ;; We propagate only values those types are not already
           ;; into typeset.
           when (cl-notany (lambda (x)
-                            (comp-subtype-p (type-of v) x))
+                            (comp-subtype-p (cl-type-of v) x))
                           (comp-cstr-typeset dst))
           collect v)))
 
@@ -699,7 +666,7 @@ DST is returned."
 
             ;; Verify disjoint condition between positive types and
             ;; negative types coming from values, in case give-up.
-            (let ((neg-value-types (nconc (mapcar #'type-of (valset neg))
+            (let ((neg-value-types (nconc (mapcar #'cl-type-of (valset neg))
                                           (when (range neg)
                                             '(integer)))))
               (when (cl-some (lambda (x)
@@ -720,7 +687,7 @@ DST is returned."
              ((cl-some (lambda (x)
                          (cl-some (lambda (y)
                                     (comp-subtype-p y x))
-                                  (mapcar #'type-of (valset pos))))
+                                  (mapcar #'cl-type-of (valset pos))))
                        (typeset neg))
               (give-up))
              (t
@@ -947,7 +914,9 @@ Non memoized version of `comp-cstr-intersection-no-mem'."
 (defun comp-cstr-fixnum-p (cstr)
   "Return t if CSTR is certainly a fixnum."
   (with-comp-cstr-accessors
-    (when (null (neg cstr))
+    (when (and (null (neg cstr))
+               (null (valset cstr))
+               (null (typeset cstr)))
       (when-let (range (range cstr))
         (let* ((low (caar range))
                (high (cdar (last range))))
@@ -962,11 +931,9 @@ Non memoized version of `comp-cstr-intersection-no-mem'."
   (with-comp-cstr-accessors
     (and (null (range cstr))
          (null (neg cstr))
-         (or (and (null (valset cstr))
+         (and (or (null (typeset cstr))
                   (equal (typeset cstr) '(symbol)))
-             (and (or (null (typeset cstr))
-                      (equal (typeset cstr) '(symbol)))
-                  (cl-every #'symbolp (valset cstr)))))))
+              (cl-every #'symbolp (valset cstr))))))
 
 (defsubst comp-cstr-cons-p (cstr)
   "Return t if CSTR is certainly a cons."
@@ -975,6 +942,28 @@ Non memoized version of `comp-cstr-intersection-no-mem'."
          (null (range cstr))
          (null (neg cstr))
          (equal (typeset cstr) '(cons)))))
+
+(defun comp-cstr-type-p (cstr type)
+  "Return t if CSTR is certainly of type TYPE."
+  (when
+      (with-comp-cstr-accessors
+        (cl-case type
+          (integer
+           (if (or (valset cstr) (neg cstr))
+               nil
+             (or (equal (typeset cstr) '(integer))
+                 (and (range cstr)
+                      (or (null (typeset cstr))
+                          (equal (typeset cstr) '(integer)))))))
+          (t
+           (if-let ((pred (get type 'cl-deftype-satisfies)))
+               (and (null (range cstr))
+                    (null (neg cstr))
+                    (and (or (null (typeset cstr))
+                             (equal (typeset cstr) `(,type)))
+                         (cl-every pred (valset cstr))))
+             (error "Unknown predicate for type %s" type)))))
+    t))
 
 ;; Move to comp.el?
 (defsubst comp-cstr-cl-tag-p (cstr)
@@ -1143,7 +1132,7 @@ DST is returned."
         (cl-loop for v in (valset dst)
                  unless (symbolp v)
                    do (push v strip-values)
-                      (push (type-of v) strip-types))
+                      (push (cl-type-of v) strip-types))
         (when strip-values
           (setf (typeset dst) (comp-union-typesets (typeset dst) strip-types)
                 (valset dst) (cl-set-difference (valset dst) strip-values)))

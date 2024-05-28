@@ -3514,6 +3514,10 @@ window-start value is reasonable when this function is called.  */)
 	     get called.  */
 	  w->optional_new_start = true;
 
+	  /* Reset the vscroll, as redisplay will not.  */
+	  w->vscroll = 0;
+	  w->preserve_vscroll_p = false;
+
 	  set_buffer_internal (obuf);
 	}
     }
@@ -4421,6 +4425,7 @@ make_window (void)
   wset_old_pointm (w, Fmake_marker ());
   wset_vertical_scroll_bar_type (w, Qt);
   wset_horizontal_scroll_bar_type (w, Qt);
+  wset_cursor_type (w, Qt);
   /* These Lisp fields are marked specially so they're not set to nil by
      allocate_window.  */
   wset_prev_buffers (w, Qnil);
@@ -5376,7 +5381,6 @@ grow_mini_window (struct window *w, int delta)
       struct window *r = XWINDOW (root);
       Lisp_Object grow;
 
-      FRAME_WINDOWS_FROZEN (f) = true;
       grow = call3 (Qwindow__resize_root_window_vertically,
 		    root, make_fixnum (- delta), Qt);
 
@@ -5390,6 +5394,8 @@ grow_mini_window (struct window *w, int delta)
 	  && window_resize_check (r, false))
 	resize_mini_window_apply (w, -XFIXNUM (grow));
     }
+  FRAME_WINDOWS_FROZEN (f)
+    = window_body_height (w, WINDOW_BODY_IN_PIXELS) > FRAME_LINE_HEIGHT (f);
 }
 
 /**
@@ -5413,7 +5419,6 @@ shrink_mini_window (struct window *w)
       struct window *r = XWINDOW (root);
       Lisp_Object grow;
 
-      FRAME_WINDOWS_FROZEN (f) = false;
       grow = call3 (Qwindow__resize_root_window_vertically,
 		    root, make_fixnum (delta), Qt);
 
@@ -5425,6 +5430,8 @@ shrink_mini_window (struct window *w)
        bar.  */
     grow_mini_window (w, -delta);
 
+  FRAME_WINDOWS_FROZEN (f)
+    = window_body_height (w, WINDOW_BODY_IN_PIXELS) > FRAME_LINE_HEIGHT (f);
 }
 
 DEFUN ("resize-mini-window-internal", Fresize_mini_window_internal,
@@ -5749,6 +5756,11 @@ window_scroll_for_long_lines (struct window *w, int n, bool noerror)
       else if (n < 0)
 	pos = *vmotion (PT, PT_BYTE, - (ht / 2), w);
       SET_PT_BOTH (pos.bufpos, pos.bytepos);
+
+      /* Since `vmotion' computes coordinates after vscroll is applied,
+         it is taken into account in POS, and vscroll must be reset by
+         `force_start' in `redisplay_internal'.  */
+      w->preserve_vscroll_p = false;
     }
   else
     {
@@ -6504,13 +6516,16 @@ When calling from a program, supply as argument a number, nil, or `-'.  */)
 }
 
 DEFUN ("other-window-for-scrolling", Fother_window_for_scrolling, Sother_window_for_scrolling, 0, 0, 0,
-       doc: /* Return the other window for \"other window scroll\" commands.
-If in the minibuffer, `minibuffer-scroll-window' if non-nil
-specifies the window.
-Otherwise, if `other-window-scroll-buffer' is non-nil, a window
-showing that buffer is used, popping the buffer up if necessary.
-Finally, look for a neighboring window on the selected frame,
-followed by all visible frames on the current terminal.  */)
+       doc: /* Return \"the other\" window for \"other window scroll\" commands.
+If in the minibuffer, and `minibuffer-scroll-window' is non-nil,
+it specifies the window to use.
+Otherwise, if `other-window-scroll-buffer' is a buffer, a window
+showing that buffer is the window to use, popping it up if necessary.
+Otherwise, if `other-window-scroll-default' is a function, call it,
+and the window it returns is the window to use.
+Finally, the function looks for a neighboring window on the selected
+frame, followed by windows on all the visible frames on the current
+terminal.  */)
   (void)
 {
   Lisp_Object window;
@@ -6889,8 +6904,14 @@ and redisplay normally--don't erase and redraw the frame.  */)
 
   /* Set the new window start.  */
   set_marker_both (w->start, w->contents, charpos, bytepos);
-  w->window_end_valid = false;
 
+  /* The window start was calculated with an iterator already adjusted
+     by the existing vscroll, so w->start must not be combined with
+     retaining the existing vscroll, which redisplay will not reset if
+     w->preserve_vscroll_p is enabled.  (bug#70386) */
+  w->vscroll = 0;
+  w->preserve_vscroll_p = false;
+  w->window_end_valid = false;
   w->optional_new_start = true;
 
   w->start_at_line_beg = (bytepos == BEGV_BYTE
@@ -6978,6 +6999,11 @@ from the top of the window.  */)
       set_marker_both (w->start, w->contents, PT, PT_BYTE);
       w->start_at_line_beg = !NILP (Fbolp ());
       w->force_start = true;
+
+      /* Since `Fvertical_motion' computes coordinates after vscroll is
+         applied, it is taken into account in POS, and vscroll must be
+         reset by `force_start' in `redisplay_internal'.  */
+      w->preserve_vscroll_p = false;
     }
   else
     Fgoto_char (w->start);
@@ -7109,6 +7135,10 @@ current at the start of the function.  If DONT-SET-MINIWINDOW is non-nil,
 the mini-window of the frame doesn't get set to the corresponding element
 of CONFIGURATION.
 
+This function consults the variable `window-restore-killed-buffer-windows'
+when restoring a window whose buffer was killed after CONFIGURATION was
+recorded.
+
 If CONFIGURATION was made from a frame that is now deleted,
 only frame-independent values can be restored.  In this case,
 the return value is nil.  Otherwise the value is t.  */)
@@ -7119,6 +7149,7 @@ the return value is nil.  Otherwise the value is t.  */)
   struct Lisp_Vector *saved_windows;
   Lisp_Object new_current_buffer;
   Lisp_Object frame;
+  Lisp_Object kept_windows = Qnil;
   Lisp_Object old_frame = selected_frame;
   struct frame *f;
   ptrdiff_t old_point = -1;
@@ -7359,6 +7390,13 @@ the return value is nil.  Otherwise the value is t.  */)
 		   BUF_PT (XBUFFER (w->contents)),
 		   BUF_PT_BYTE (XBUFFER (w->contents)));
 	      w->start_at_line_beg = true;
+	      if (FUNCTIONP (window_restore_killed_buffer_windows)
+		  && !MINI_WINDOW_P (w))
+		kept_windows = Fcons (listn (6, window, p->buffer,
+					     Fmarker_last_position (p->start),
+					     Fmarker_last_position (p->pointm),
+					     p->dedicated, Qt),
+				      kept_windows);
 	    }
 	  else if (!NILP (w->start))
 	    /* Leaf window has no live buffer, get one.  */
@@ -7374,11 +7412,25 @@ the return value is nil.  Otherwise the value is t.  */)
 	      set_marker_restricted_both (w->pointm, w->contents, 0, 0);
 	      set_marker_restricted_both (w->old_pointm, w->contents, 0, 0);
 	      w->start_at_line_beg = true;
-	      if (!NILP (w->dedicated))
-		/* Record this window as dead.  */
-		dead_windows = Fcons (window, dead_windows);
-	      /* Make sure window is no more dedicated.  */
-	      wset_dedicated (w, Qnil);
+	      if (!MINI_WINDOW_P (w))
+		{
+		  if (FUNCTIONP (window_restore_killed_buffer_windows))
+		    kept_windows
+		      = Fcons (listn (6, window, p->buffer,
+				      Fmarker_last_position (p->start),
+				      Fmarker_last_position (p->pointm),
+				      p->dedicated, Qnil),
+			       kept_windows);
+		  else if (EQ (window_restore_killed_buffer_windows, Qdelete)
+			   || (!NILP (p->dedicated)
+			       && (NILP (window_restore_killed_buffer_windows)
+				   || EQ (window_restore_killed_buffer_windows,
+					  Qdedicated))))
+		    /* Try to delete this window later.  */
+		    dead_windows = Fcons (window, dead_windows);
+		  /* Make sure window is no more dedicated.  */
+		  wset_dedicated (w, Qnil);
+		}
 	    }
 	}
 
@@ -7482,6 +7534,11 @@ the return value is nil.  Otherwise the value is t.  */)
   minibuf_selected_window = data->minibuf_selected_window;
 
   SAFE_FREE ();
+
+  if (!NILP (Vrun_hooks) && FUNCTIONP (window_restore_killed_buffer_windows))
+    safe_calln (window_restore_killed_buffer_windows,
+		frame, kept_windows, Qconfiguration);
+
   return FRAME_LIVE_P (f) ? Qt : Qnil;
 }
 
@@ -7994,6 +8051,52 @@ PERSISTENT), see `set-window-fringes'.  */)
 		w->fringes_persistent ? Qt : Qnil);
 }
 
+DEFUN ("set-window-cursor-type", Fset_window_cursor_type,
+       Sset_window_cursor_type, 2, 2, 0,
+       doc: /* Set the `cursor-type' of WINDOW to TYPE.
+
+This setting takes precedence over the variable `cursor-type', and TYPE
+has the same format as the value of that variable.  The initial value
+for new windows is t, which says to respect the buffer-local value of
+`cursor-type'.
+
+WINDOW nil means use the selected window.  This setting persists across
+buffers shown in WINDOW, so `set-window-buffer' does not reset it.  */)
+  (Lisp_Object window, Lisp_Object type)
+{
+  struct window *w = decode_live_window (window);
+
+  if (!(NILP (type)
+	|| EQ (type, Qt)
+	|| EQ (type, Qbox)
+	|| EQ (type, Qhollow)
+	|| EQ (type, Qbar)
+	|| EQ (type, Qhbar)
+	|| (CONSP (type)
+	    && (EQ (XCAR (type), Qbox)
+		|| EQ (XCAR (type), Qbar)
+		|| EQ (XCAR (type), Qhbar))
+	    && INTEGERP (XCDR (type)))))
+    error ("Invalid cursor type");
+
+  wset_cursor_type (w, type);
+
+  /* Redisplay with updated cursor type.  */
+  wset_redisplay (w);
+
+  return type;
+}
+
+/* FIXME: Add a way to get the _effective_ cursor type, possibly by
+   extending this function with an additional optional argument.  */
+DEFUN ("window-cursor-type", Fwindow_cursor_type, Swindow_cursor_type,
+       0, 1, 0,
+       doc: /* Return the `cursor-type' of WINDOW.
+WINDOW must be a live window and defaults to the selected one.  */)
+  (Lisp_Object window)
+{
+  return decode_live_window (window)->cursor_type;
+}
 
 
 /***********************************************************************
@@ -8135,9 +8238,18 @@ DEFUN ("window-scroll-bars", Fwindow_scroll_bars, Swindow_scroll_bars,
 WINDOW must be a live window and defaults to the selected one.
 
 Value is a list of the form (WIDTH COLUMNS VERTICAL-TYPE HEIGHT LINES
-HORIZONTAL-TYPE PERSISTENT), see `set-window-scroll-bars'.  If WIDTH
-or HEIGHT is nil or VERTICAL-TYPE or HORIZONTAL-TYPE is t, WINDOW is
-using the frame's corresponding value.  */)
+HORIZONTAL-TYPE PERSISTENT).  WIDTH reports the pixel width of the
+vertical scroll bar; COLUMNS is the equivalent number of columns.
+Similarly, HEIGHT and LINES are the height of the horizontal scroll
+bar in pixels and the equivalent number of lines.  VERTICAL-TYPE
+reports the type of the vertical scroll bar, either left, right, nil,
+or t.  HORIZONTAL-TYPE reports the type of the horizontal scroll bar,
+either bottom, nil or t.  PERSISTENT reports the value specified by
+the last successful call to `set-window-scroll-bars', or nil if there
+was none.
+
+If WIDTH or HEIGHT is nil or VERTICAL-TYPE or HORIZONTAL-TYPE is t,
+WINDOW is using the corresponding value specified for the frame.  */)
   (Lisp_Object window)
 {
   struct window *w = decode_live_window (window);
@@ -8479,6 +8591,9 @@ syms_of_window (void)
   DEFSYM (Qheader_line_format, "header-line-format");
   DEFSYM (Qtab_line_format, "tab-line-format");
   DEFSYM (Qno_other_window, "no-other-window");
+  DEFSYM (Qconfiguration, "configuration");
+  DEFSYM (Qdelete, "delete");
+  DEFSYM (Qdedicated, "dedicated");
 
   DEFVAR_LISP ("temp-buffer-show-function", Vtemp_buffer_show_function,
 	       doc: /* Non-nil means call as function to display a help buffer.
@@ -8635,6 +8750,62 @@ at least one window on that frame has been added, deleted or changed
 its buffer or its total or body size since the last redisplay.  Each
 call is performed with the frame temporarily selected.  */);
   Vwindow_configuration_change_hook = Qnil;
+
+  DEFVAR_LISP ("window-restore-killed-buffer-windows",
+	       window_restore_killed_buffer_windows,
+	       doc: /* Control restoring windows whose buffer was killed.
+This variable specifies how the functions `set-window-configuration' and
+`window-state-put' shall handle a window whose buffer has been killed
+since the corresponding configuration or state was recorded.  Any such
+window may be live -- in which case it shows some other buffer -- or
+dead at the time one of these functions is called.
+
+By default, `set-window-configuration' leaves the window alone if it is
+live, while `window-state-put' deletes it.  The following values can be
+used to override the default behavior for dead windows in the case of
+`set-window-configuration' and for dead and live windows in the case of
+`window-state-put'.
+
+ - t means to restore the window and show some other buffer in it.
+
+ - `delete' means to try to delete the window.
+
+ - `dedicated' means to try to delete the window if and only if it is
+   dedicated to its buffer.
+
+ - nil, the default, which means that `set-window-configuration' will
+   try to delete the window if and only if it is dedicated to its
+   buffer while `window-state-put' will unconditionally try to delete
+   it.
+
+ - a function means to restore the window and show some other buffer in
+   it, like if the value were t, but also to add an entry for that
+   window to a list that will be later passed as argument to that
+   function.
+
+If a window cannot be deleted (typically, because it is the last window
+on its frame), show another buffer in it.
+
+If the value is a function, it should take three arguments.  The first
+argument specifies the frame whose windows have been restored.  The
+third argument is the symbol `configuration' if the windows are
+restored by `set-window-configuration' and the symbol `state' if the
+windows are restored by `window-state-put'.
+
+The second argument specifies a list of entries for all windows whose
+previous buffers have been found dead at the time
+`set-window-configuration' or `window-state-put' tried to restore them
+(minibuffer windows are excluded).  This means that the function
+specified by this variable may also delete windows which were found to
+be alive by `set-window-configuration'.
+
+Each entry is a list of six values: the window whose buffer was found
+dead, the dead buffer or its name, the positions of window-start and
+window-point of the buffer in that window, the dedicated state of the
+window as reported by `window-dedicated-p', and a boolean -- t if the
+window was live when `set-window-configuration' tried to restore it,
+and nil otherwise.  */);
+  window_restore_killed_buffer_windows = Qnil;
 
   DEFVAR_LISP ("recenter-redisplay", Vrecenter_redisplay,
 	       doc: /* Non-nil means `recenter' redraws entire frame.
@@ -8861,4 +9032,6 @@ displayed after a scrolling operation to be somewhat inaccurate.  */);
   defsubr (&Swindow_parameters);
   defsubr (&Swindow_parameter);
   defsubr (&Sset_window_parameter);
+  defsubr (&Swindow_cursor_type);
+  defsubr (&Sset_window_cursor_type);
 }

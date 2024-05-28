@@ -53,9 +53,10 @@
 ;; - Handle `diff -b' output in context->unified.
 
 ;;; Code:
+(require 'easy-mmode)
+(require 'track-changes)
 (eval-when-compile (require 'cl-lib))
 (eval-when-compile (require 'subr-x))
-(require 'easy-mmode)
 
 (autoload 'vc-find-revision "vc")
 (autoload 'vc-find-revision-no-save "vc")
@@ -240,6 +241,8 @@ The default \"-b\" means to ignore whitespace-only changes,
      :help "Apply the current hunk to the source file and go to the next"]
     ["Test applying hunk"	diff-test-hunk
      :help "See whether it's possible to apply the current hunk"]
+    ["Apply all hunks"		diff-apply-buffer
+     :help "Apply all hunks in the current diff buffer"]
     ["Apply diff with Ediff"	diff-ediff-patch
      :help "Call `ediff-patch-file' on the current buffer"]
     ["Create Change Log entries" diff-add-change-log-entries-other-window
@@ -517,8 +520,8 @@ use the face `diff-removed' for removed lines, and the face
     ("^Only in .*\n" . 'diff-nonexistent)
     ("^Binary files .* differ\n" . 'diff-file-header)
     ("^\\(#\\)\\(.*\\)"
-     (1 font-lock-comment-delimiter-face)
-     (2 font-lock-comment-face))
+     (1 'font-lock-comment-delimiter-face)
+     (2 'font-lock-comment-face))
     ("^diff: .*" (0 'diff-error))
     ("^[^-=+*!<>#].*\n" (0 'diff-context))
     (,#'diff--font-lock-syntax)
@@ -944,7 +947,8 @@ like \(diff-merge-strings \"b/foo\" \"b/bar\" \"/a/c/foo\")."
     (when (and (string-match (concat
 			      "\\`\\(.*?\\)\\(.*\\)\\(.*\\)\n"
 			      "\\1\\(.*\\)\\3\n"
-			      "\\(.*\\(\\2\\).*\\)\\'") str)
+			      "\\(.*\\(\\2\\).*\\)\\'")
+			     str)
 	       (equal to (match-string 5 str)))
       (concat (substring str (match-beginning 5) (match-beginning 6))
 	      (match-string 4 str)
@@ -1428,38 +1432,23 @@ else cover the whole buffer."
   (if (buffer-modified-p) (diff-fixup-modifs (point-min) (point-max)))
   nil)
 
-;; It turns out that making changes in the buffer from within an
-;; *-change-function is asking for trouble, whereas making them
-;; from a post-command-hook doesn't pose much problems
-(defvar diff-unhandled-changes nil)
-(defun diff-after-change-function (beg end _len)
-  "Remember to fixup the hunk header.
-See `after-change-functions' for the meaning of BEG, END and LEN."
-  ;; Ignoring changes when inhibit-read-only is set is strictly speaking
-  ;; incorrect, but it turns out that inhibit-read-only is normally not set
-  ;; inside editing commands, while it tends to be set when the buffer gets
-  ;; updated by an async process or by a conversion function, both of which
-  ;; would rather not be uselessly slowed down by this hook.
-  (when (and (not undo-in-progress) (not inhibit-read-only))
-    (if diff-unhandled-changes
-	(setq diff-unhandled-changes
-	      (cons (min beg (car diff-unhandled-changes))
-		    (max end (cdr diff-unhandled-changes))))
-      (setq diff-unhandled-changes (cons beg end)))))
+(defvar-local diff--track-changes nil)
 
-(defun diff-post-command-hook ()
-  "Fixup hunk headers if necessary."
-  (when (consp diff-unhandled-changes)
-    (ignore-errors
-      (save-excursion
-	(goto-char (car diff-unhandled-changes))
-	;; Maybe we've cut the end of the hunk before point.
-	(if (and (bolp) (not (bobp))) (backward-char 1))
-	;; We used to fixup modifs on all the changes, but it turns out that
-	;; it's safer not to do it on big changes, e.g. when yanking a big
-	;; diff, or when the user edits the header, since we might then
-	;; screw up perfectly correct values.  --Stef
-	(diff-beginning-of-hunk t)
+(defun diff--track-changes-signal (tracker)
+  (cl-assert (eq tracker diff--track-changes))
+  (track-changes-fetch tracker #'diff--track-changes-function))
+
+(defun diff--track-changes-function (beg end _before)
+  (with-demoted-errors "%S"
+    (save-excursion
+      (goto-char beg)
+      ;; Maybe we've cut the end of the hunk before point.
+      (if (and (bolp) (not (bobp))) (backward-char 1))
+      ;; We used to fixup modifs on all the changes, but it turns out that
+      ;; it's safer not to do it on big changes, e.g. when yanking a big
+      ;; diff, or when the user edits the header, since we might then
+      ;; screw up perfectly correct values.  --Stef
+      (when (ignore-errors (diff-beginning-of-hunk t))
         (let* ((style (if (looking-at "\\*\\*\\*") 'context))
                (start (line-beginning-position (if (eq style 'context) 3 2)))
                (mid (if (eq style 'context)
@@ -1467,17 +1456,20 @@ See `after-change-functions' for the meaning of BEG, END and LEN."
                           (re-search-forward diff-context-mid-hunk-header-re
                                              nil t)))))
           (when (and ;; Don't try to fixup changes in the hunk header.
-                 (>= (car diff-unhandled-changes) start)
+                 (>= beg start)
                  ;; Don't try to fixup changes in the mid-hunk header either.
                  (or (not mid)
-                     (< (cdr diff-unhandled-changes) (match-beginning 0))
-                     (> (car diff-unhandled-changes) (match-end 0)))
+                     (< end (match-beginning 0))
+                     (> beg (match-end 0)))
                  (save-excursion
-		(diff-end-of-hunk nil 'donttrustheader)
+		   (diff-end-of-hunk nil 'donttrustheader)
                    ;; Don't try to fixup changes past the end of the hunk.
-                   (>= (point) (cdr diff-unhandled-changes))))
-	  (diff-fixup-modifs (point) (cdr diff-unhandled-changes)))))
-      (setq diff-unhandled-changes nil))))
+                   (>= (point) end)))
+	   (diff-fixup-modifs (point) end)
+	   ;; Ignore the changes we just made ourselves.
+	   ;; This is not indispensable since the above `when' skips
+	   ;; changes like the ones we make anyway, but it's good practice.
+	   (track-changes-fetch diff--track-changes #'ignore)))))))
 
 (defun diff-next-error (arg reset)
   ;; Select a window that displays the current buffer so that point
@@ -1557,9 +1549,8 @@ a diff with \\[diff-reverse-direction].
   ;; setup change hooks
   (if (not diff-update-on-the-fly)
       (add-hook 'write-contents-functions #'diff-write-contents-hooks nil t)
-    (make-local-variable 'diff-unhandled-changes)
-    (add-hook 'after-change-functions #'diff-after-change-function nil t)
-    (add-hook 'post-command-hook #'diff-post-command-hook nil t))
+    (setq diff--track-changes
+          (track-changes-register #'diff--track-changes-signal :nobefore t)))
 
   ;; add-log support
   (setq-local add-log-current-defun-function #'diff-current-defun)
@@ -1578,12 +1569,15 @@ a diff with \\[diff-reverse-direction].
 \\{diff-minor-mode-map}"
   :group 'diff-mode :lighter " Diff"
   ;; FIXME: setup font-lock
-  ;; setup change hooks
-  (if (not diff-update-on-the-fly)
-      (add-hook 'write-contents-functions #'diff-write-contents-hooks nil t)
-    (make-local-variable 'diff-unhandled-changes)
-    (add-hook 'after-change-functions #'diff-after-change-function nil t)
-    (add-hook 'post-command-hook #'diff-post-command-hook nil t)))
+  (when diff--track-changes (track-changes-unregister diff--track-changes))
+  (remove-hook 'write-contents-functions #'diff-write-contents-hooks t)
+  (when diff-minor-mode
+    (if (not diff-update-on-the-fly)
+        (add-hook 'write-contents-functions #'diff-write-contents-hooks nil t)
+      (unless diff--track-changes
+        (setq diff--track-changes
+              (track-changes-register #'diff--track-changes-signal
+                                      :nobefore t))))))
 
 ;;; Handy hook functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1616,7 +1610,7 @@ modified lines of the diff."
                   nil)))
   (when (eq diff-buffer-type 'git)
     (setq diff-outline-regexp
-          (concat "\\(^diff --git.*\n\\|" diff-hunk-header-re "\\)")))
+          (concat "\\(^diff --git.*\\|" diff-hunk-header-re "\\)")))
   (setq-local outline-level #'diff--outline-level)
   (setq-local outline-regexp diff-outline-regexp))
 
@@ -1999,7 +1993,7 @@ With a prefix argument, REVERSE the hunk."
                (diff-find-source-location nil reverse)))
     (cond
      ((null line-offset)
-      (error "Can't find the text to patch"))
+      (user-error "Can't find the text to patch"))
      ((with-current-buffer buf
         (and buffer-file-name
              (backup-file-name-p buffer-file-name)
@@ -2008,7 +2002,7 @@ With a prefix argument, REVERSE the hunk."
                               (yes-or-no-p (format "Really apply this hunk to %s? "
                                                    (file-name-nondirectory
                                                     buffer-file-name)))))))
-      (error "%s"
+      (user-error "%s"
 	     (substitute-command-keys
               (format "Use %s\\[diff-apply-hunk] to apply it to the other file"
                       (if (not reverse) "\\[universal-argument] ")))))
@@ -2275,6 +2269,24 @@ Return new point, if it was moved."
             (end (progn (diff-end-of-hunk) (point))))
         (diff--refine-hunk beg end)))))
 
+(defun diff--refine-propertize (beg end face)
+  (let ((ol (make-overlay beg end)))
+    (overlay-put ol 'diff-mode 'fine)
+    (overlay-put ol 'evaporate t)
+    (overlay-put ol 'face face)))
+
+(defcustom diff-refine-nonmodified nil
+  "If non-nil, also highlight the added/removed lines as \"refined\".
+The lines highlighted when this is non-nil are those that were
+added or removed in their entirety, as opposed to lines some
+parts of which were modified.  The added lines are highlighted
+using the `diff-refine-added' face, while the removed lines are
+highlighted using the `diff-refine-removed' face.
+This is currently implemented only for diff formats supported
+by `diff-refine-hunk'."
+  :version "30.1"
+  :type 'boolean)
+
 (defun diff--refine-hunk (start end)
   (require 'smerge-mode)
   (goto-char start)
@@ -2289,41 +2301,68 @@ Return new point, if it was moved."
     (goto-char beg)
     (pcase style
       ('unified
-       (while (re-search-forward "^-" end t)
+       (while (re-search-forward "^[-+]" end t)
          (let ((beg-del (progn (beginning-of-line) (point)))
                beg-add end-add)
-           (when (and (diff--forward-while-leading-char ?- end)
-                      ;; Allow for "\ No newline at end of file".
-                      (progn (diff--forward-while-leading-char ?\\ end)
-                             (setq beg-add (point)))
-                      (diff--forward-while-leading-char ?+ end)
-                      (progn (diff--forward-while-leading-char ?\\ end)
-                             (setq end-add (point))))
+           (cond
+            ((eq (char-after) ?+)
+             (diff--forward-while-leading-char ?+ end)
+             (when diff-refine-nonmodified
+               (diff--refine-propertize beg-del (point) 'diff-refine-added)))
+            ((and (diff--forward-while-leading-char ?- end)
+                  ;; Allow for "\ No newline at end of file".
+                  (progn (diff--forward-while-leading-char ?\\ end)
+                         (setq beg-add (point)))
+                  (diff--forward-while-leading-char ?+ end)
+                  (progn (diff--forward-while-leading-char ?\\ end)
+                         (setq end-add (point))))
              (smerge-refine-regions beg-del beg-add beg-add end-add
-                                    nil #'diff-refine-preproc props-r props-a)))))
+                                    nil #'diff-refine-preproc props-r props-a))
+            (t ;; If we're here, it's because
+             ;; (diff--forward-while-leading-char ?+ end) failed.
+             (when diff-refine-nonmodified
+              (diff--refine-propertize beg-del (point)
+                                       'diff-refine-removed)))))))
       ('context
        (let* ((middle (save-excursion (re-search-forward "^---" end t)))
               (other middle))
-         (while (and middle
-		     (re-search-forward "^\\(?:!.*\n\\)+" middle t))
-           (smerge-refine-regions (match-beginning 0) (match-end 0)
-                                  (save-excursion
-                                    (goto-char other)
-                                    (re-search-forward "^\\(?:!.*\n\\)+" end)
-                                    (setq other (match-end 0))
-                                    (match-beginning 0))
-                                  other
-                                  (if diff-use-changed-face props-c)
-                                  #'diff-refine-preproc
-                                  (unless diff-use-changed-face props-r)
-                                  (unless diff-use-changed-face props-a)))))
+         (when middle
+           (while (re-search-forward "^\\(?:!.*\n\\)+" middle t)
+             (smerge-refine-regions (match-beginning 0) (match-end 0)
+                                    (save-excursion
+                                      (goto-char other)
+                                      (re-search-forward "^\\(?:!.*\n\\)+" end)
+                                      (setq other (match-end 0))
+                                      (match-beginning 0))
+                                    other
+                                    (if diff-use-changed-face props-c)
+                                    #'diff-refine-preproc
+                                    (unless diff-use-changed-face props-r)
+                                    (unless diff-use-changed-face props-a)))
+           (when diff-refine-nonmodified
+             (goto-char beg)
+             (while (re-search-forward "^\\(?:-.*\n\\)+" middle t)
+               (diff--refine-propertize (match-beginning 0)
+                                        (match-end 0)
+                                        'diff-refine-removed))
+             (goto-char middle)
+             (while (re-search-forward "^\\(?:\\+.*\n\\)+" end t)
+               (diff--refine-propertize (match-beginning 0)
+                                        (match-end 0)
+                                        'diff-refine-added))))))
       (_ ;; Normal diffs.
        (let ((beg1 (1+ (point))))
-         (when (re-search-forward "^---.*\n" end t)
+         (cond
+          ((re-search-forward "^---.*\n" end t)
            ;; It's a combined add&remove, so there's something to do.
            (smerge-refine-regions beg1 (match-beginning 0)
                                   (match-end 0) end
-                                  nil #'diff-refine-preproc props-r props-a)))))))
+                                  nil #'diff-refine-preproc props-r props-a))
+          (diff-refine-nonmodified
+           (diff--refine-propertize
+            beg1 end
+            (if (eq (char-after beg1) ?<)
+                'diff-refine-removed 'diff-refine-added)))))))))
 
 (defun diff--iterate-hunks (max fun)
   "Iterate over all hunks between point and MAX.

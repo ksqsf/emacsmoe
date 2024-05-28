@@ -164,7 +164,7 @@ Earlier variables shadow later ones with the same name.")
        ;; The byte-code will be really inlined in byte-compile-unfold-bcf.
        (byte-compile--check-arity-bytecode form fn)
        `(,fn ,@(cdr form)))
-      ((or `(lambda . ,_) `(closure . ,_))
+      ((pred interpreted-function-p)
        ;; While byte-compile-unfold-bcf can inline dynbind byte-code into
        ;; letbind byte-code (or any other combination for that matter), we
        ;; can only inline dynbind source into dynbind source or lexbind
@@ -481,9 +481,6 @@ There can be multiple entries for the same NAME if it has several aliases.")
                                         (cdr rest)))))
          (push name byte-optimize--dynamic-vars)
          `(,fn ,name . ,optimized-rest)))
-
-      (`(,(pred byte-code-function-p) . ,exps)
-       (cons fn (mapcar #'byte-optimize-form exps)))
 
       ((guard (when for-effect
 		(if-let ((tmp (byte-opt--fget fn 'side-effect-free)))
@@ -1448,7 +1445,8 @@ See Info node `(elisp) Integer Basics'."
 
 (defun byte-optimize-apply (form)
   (let ((len (length form)))
-    (if (>= len 2)
+    ;; Single-arg `apply' is an abomination that we don't bother optimizing.
+    (if (> len 2)
         (let ((fn (nth 1 form))
 	      (last (nth (1- len) form)))
           (cond
@@ -1514,13 +1512,15 @@ See Info node `(elisp) Integer Basics'."
 (put 'nthcdr 'byte-optimizer #'byte-optimize-nthcdr)
 (defun byte-optimize-nthcdr (form)
   (if (= (safe-length form) 3)
-      (if (memq (nth 1 form) '(0 1 2))
-	  (let ((count (nth 1 form)))
-	    (setq form (nth 2 form))
-	    (while (>= (setq count (1- count)) 0)
-	      (setq form (list 'cdr form)))
-	    form)
-	form)
+      (let ((count (nth 1 form)))
+        (cond ((and (integerp count) (<= count 3))
+	       (setq form (nth 2 form))
+	       (while (>= (setq count (1- count)) 0)
+	         (setq form (list 'cdr form)))
+	       form)
+              ((not (eq (car form) 'nthcdr))
+               (cons 'nthcdr (cdr form)))  ; use the nthcdr byte-op
+              (t form)))
     form))
 
 (put 'cons 'byte-optimizer #'byte-optimize-cons)
@@ -1774,7 +1774,7 @@ See Info node `(elisp) Integer Basics'."
          string-version-lessp
          substring substring-no-properties
          sxhash-eq sxhash-eql sxhash-equal sxhash-equal-including-properties
-         take vconcat
+         take value< vconcat
          ;; frame.c
          frame-ancestor-p frame-bottom-divider-width frame-char-height
          frame-char-width frame-child-frame-border-width frame-focus
@@ -1872,6 +1872,7 @@ See Info node `(elisp) Integer Basics'."
          charsetp
          ;; data.c
          arrayp atom bare-symbol-p bool-vector-p bufferp byte-code-function-p
+         interpreted-function-p closurep
          byteorder car-safe cdr-safe char-or-string-p char-table-p
          condition-variable-p consp eq floatp indirect-function
          integer-or-marker-p integerp keywordp listp markerp
@@ -1975,7 +1976,7 @@ See Info node `(elisp) Integer Basics'."
          hash-table-p identity length length< length=
          length> member memq memql nth nthcdr proper-list-p rassoc rassq
          safe-length string-bytes string-distance string-equal string-lessp
-         string-search string-version-lessp take
+         string-search string-version-lessp take value<
          ;; search.c
          regexp-quote
          ;; syntax.c
@@ -3115,7 +3116,6 @@ If FOR-EFFECT is non-nil, the return value is assumed to be of no importance."
 ;;
 (eval-when-compile
  (or (compiled-function-p (symbol-function 'byte-optimize-form))
-     (assq 'byte-code (symbol-function 'byte-optimize-form))
      (let ((byte-optimize nil)
 	   (byte-compile-warnings nil))
        (mapc (lambda (x)

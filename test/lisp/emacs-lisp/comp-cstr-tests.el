@@ -169,7 +169,7 @@ The arg is an alist of: type specifier -> expected type specifier."
   ((and symbol (not symbol)) . nil)
   ;; 61
   ((and atom (not symbol)) . atom)
-  ;; 62
+  ;; 62 Conservative FIXME
   ((and atom (not string)) . (or array sequence atom))
   ;; 63 Conservative
   ((and symbol (not (member foo))) . symbol)
@@ -232,9 +232,8 @@ The arg is an alist of: type specifier -> expected type specifier."
   ;; 92
   ((or string char-table bool-vector vector cons symbol number) .
    (or number sequence symbol))
-  ;; 93?
-  ;; FIXME: I get `cons' rather than `list'?
-  ;;((or null cons) . list)
+  ;; 93
+  ((or list (not null)) . t)
   ))
 
 ;;; comp-cstr-tests.el ends here

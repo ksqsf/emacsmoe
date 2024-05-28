@@ -503,6 +503,10 @@ sfntfont_android_put_glyphs (struct glyph_string *s, int from,
 
   if (with_background)
     {
+      /* The background should have been filled in advance if a stipple
+	 is enabled.  */
+      eassert (s->gc->fill_style != ANDROID_FILL_OPAQUE_STIPPLED);
+
       /* Fill the background.  First, offset the background rectangle
 	 to become relative from text_rectangle.x,
 	 text_rectangle.y.  */
@@ -770,7 +774,7 @@ init_sfntfont_android (void)
 		      build_string ("Roboto")),
 	       Fcons (build_string ("DejaVu Serif"),
 		      build_string ("Noto Serif")));
-  else if (api_level >= 15)
+  else if (api_level >= 14)
     /* Android 4.0 and later distribute Roboto in lieu of Droid
        Sans.  */
     Vsfnt_default_family_alist

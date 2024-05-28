@@ -800,6 +800,9 @@ inner loops respectively."
     ;; Aristotelian identity optimization
     (let ((x (bytecomp-test-identity 1)))
       (list (eq x x) (eql x x) (equal x x)))
+
+    ;; Legacy single-arg `apply' call
+    (apply '(* 2 3))
     )
   "List of expressions for cross-testing interpreted and compiled code.")
 
@@ -1132,7 +1135,7 @@ byte-compiled.  Run with dynamic binding."
                             "var.*foo.*lacks a prefix")
 
 (bytecomp--define-warning-file-test "warn-format.el"
-                            "called with 2 args to fill 1 format field")
+                            "called with 2 arguments to fill 1 format field")
 
 (bytecomp--define-warning-file-test "warn-free-setq.el"
                             "free.*foo")
@@ -1345,12 +1348,14 @@ byte-compiled.  Run with dynamic binding."
               (string-search
                "file has no `lexical-binding' directive on its first line"
                (bytecomp-tests--log-from-compilation source))))
-    (let ((some-code "(defun my-fun () 12)\n"))
-      (should-not (cookie-warning
-                   (concat ";;; -*-lexical-binding:t-*-\n" some-code)))
-      (should-not (cookie-warning
-                   (concat ";;; -*-lexical-binding:nil-*-\n" some-code)))
-      (should (cookie-warning some-code)))))
+    (dolist (lb '(t nil))
+      (let ((lexical-binding lb)
+            (some-code "(defun my-fun () 12)\n"))
+        (should-not (cookie-warning
+                     (concat ";;; -*-lexical-binding:t-*-\n" some-code)))
+        (should-not (cookie-warning
+                     (concat ";;; -*-lexical-binding:nil-*-\n" some-code)))
+        (should (cookie-warning some-code))))))
 
 (ert-deftest bytecomp-tests--unescaped-char-literals ()
   "Check that byte compiling warns about unescaped character

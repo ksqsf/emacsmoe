@@ -2515,7 +2515,8 @@ have special meanings:
 
 Any other value of ALL-FRAMES means consider all windows on the
 selected frame and no others."
-  (declare (side-effect-free error-free))
+  (declare (ftype (function (&optional t t t) (or window null)))
+           (side-effect-free error-free))
   (let ((windows (window-list-1 nil 'nomini all-frames))
         best-window best-time second-best-window second-best-time time)
     (dolist (window windows)
@@ -2594,7 +2595,8 @@ have special meanings:
 
 Any other value of ALL-FRAMES means consider all windows on the
 selected frame and no others."
-  (declare (side-effect-free error-free))
+  (declare (ftype (function (&optional t t t) (or window null)))
+           (side-effect-free error-free))
   (let ((best-size 0)
 	best-window size)
     (dolist (window (window-list-1 nil 'nomini all-frames))
@@ -4089,7 +4091,8 @@ with a special meaning are:
 
 Anything else means consider all windows on the selected frame
 and no others."
-  (declare (side-effect-free error-free))
+  (declare (ftype (function (&optional t t) boolean))
+           (side-effect-free error-free))
   (let ((base-window (selected-window)))
     (if (and nomini (eq base-window (minibuffer-window)))
 	(setq base-window (next-window base-window)))
@@ -6174,6 +6177,12 @@ value can be also stored on disk and read back in a new session."
 (defvar window-state-put-stale-windows nil
   "Helper variable for `window-state-put'.")
 
+(defvar window-state-put-kept-windows nil
+  "Helper variable for `window-state-put'.")
+
+(defvar window-state-put-selected-window nil
+  "Helper variable for `window-state-put'.")
+
 (defun window--state-put-1 (state &optional window ignore totals pixelwise)
   "Helper function for `window-state-put'."
   (let ((type (car state)))
@@ -6278,9 +6287,11 @@ value can be also stored on disk and read back in a new session."
 	  (set-window-parameter window (car parameter) (cdr parameter))))
       ;; Process buffer related state.
       (when state
-	(let ((buffer (get-buffer (car state)))
-	      (state (cdr state)))
-	  (if buffer
+	(let* ((old-buffer-or-name (car state))
+	       (buffer (get-buffer old-buffer-or-name))
+	       (state (cdr state))
+	       (dedicated (cdr (assq 'dedicated state))))
+	  (if (buffer-live-p buffer)
 	      (with-current-buffer buffer
 		(set-window-buffer window buffer)
 		(set-window-hscroll window (cdr (assq 'hscroll state)))
@@ -6338,7 +6349,7 @@ value can be also stored on disk and read back in a new session."
 				window delta t ignore nil nil nil pixelwise))
 		      (window-resize window delta t ignore pixelwise))))
 		;; Set dedicated status.
-		(set-window-dedicated-p window (cdr (assq 'dedicated state)))
+		(set-window-dedicated-p window dedicated)
 		;; Install positions (maybe we should do this after all
 		;; windows have been created and sized).
 		(ignore-errors
@@ -6348,7 +6359,18 @@ value can be also stored on disk and read back in a new session."
 		  (set-window-point window (cdr (assq 'point state))))
 		;; Select window if it's the selected one.
 		(when (cdr (assq 'selected state))
-		  (select-window window))
+		  ;; This used to call 'select-window' which, however,
+		  ;; can be partially undone because the current buffer
+		  ;; may subsequently change twice: When leaving the
+		  ;; present 'with-current-buffer' and when leaving the
+		  ;; containing 'with-temp-buffer' form (Bug#69093).
+		  ;; 'window-state-put-selected-window' should now work
+		  ;; around that bug but we leave this 'select-window'
+		  ;; in since some code run before the part that fixed
+		  ;; it might still refer to this window as the selected
+		  ;; one.
+		  (select-window window)
+		  (setq window-state-put-selected-window window))
                 (set-window-next-buffers
                  window
                  (delq nil (mapcar (lambda (buffer)
@@ -6370,12 +6392,31 @@ value can be also stored on disk and read back in a new session."
                                                  (set-marker (make-marker) m2
                                                              buffer))))))
                                    prev-buffers))))
-	    ;; We don't want to raise an error in case the buffer does
-	    ;; not exist anymore, so we switch to a previous one and
-	    ;; save the window with the intention of deleting it later
-	    ;; if possible.
-	    (switch-to-prev-buffer window)
-	    (push window window-state-put-stale-windows)))))))
+	    (unless (window-minibuffer-p window)
+	      ;; Preferably show a buffer previously shown in this
+	      ;; window.
+	      (switch-to-prev-buffer window)
+	      (cond
+	       ((functionp window-restore-killed-buffer-windows)
+		(let* ((start (cdr (assq 'start state)))
+		       ;; Handle both - marker positions from writable
+		       ;; states and markers from non-writable states.
+		       (start-pos (if (markerp start)
+				      (marker-last-position start)
+				    start))
+		       (point (cdr (assq 'point state)))
+		       (point-pos (if (markerp point)
+				      (marker-last-position point)
+				    point)))
+		  (push (list window old-buffer-or-name
+			      start-pos point-pos dedicated nil)
+			window-state-put-kept-windows)))
+	       ((or (and dedicated
+			 (eq window-restore-killed-buffer-windows 'dedicated))
+		    (memq window-restore-killed-buffer-windows '(nil delete)))
+		;; Try to delete the window.
+		(push window window-state-put-stale-windows)))
+	      (set-window-dedicated-p window nil))))))))
 
 (defun window-state-put (state &optional window ignore)
   "Put window state STATE into WINDOW.
@@ -6388,8 +6429,13 @@ If WINDOW is nil, create a new window before putting STATE into it.
 Optional argument IGNORE non-nil means ignore minimum window
 sizes and fixed size restrictions.  IGNORE equal `safe' means
 windows can get as small as `window-safe-min-height' and
-`window-safe-min-width'."
+`window-safe-min-width'.
+
+If this function tries to restore a non-minibuffer window whose buffer
+was killed since STATE was made, it will consult the variable
+`window-restore-killed-buffer-windows' on how to proceed."
   (setq window-state-put-stale-windows nil)
+  (setq window-state-put-kept-windows nil)
 
   ;; When WINDOW is internal or nil, reduce it to a live one,
   ;; then create a new window on the same frame to put STATE into.
@@ -6482,6 +6528,7 @@ windows can get as small as `window-safe-min-height' and
 	(error "Window %s too small to accommodate state" window)
       (setq state (cdr state))
       (setq window-state-put-list nil)
+      (setq window-state-put-selected-window nil)
       ;; Work on the windows of a temporary buffer to make sure that
       ;; splitting proceeds regardless of any buffer local values of
       ;; `window-size-fixed'.  Release that buffer after the buffers of
@@ -6490,14 +6537,20 @@ windows can get as small as `window-safe-min-height' and
 	(set-window-buffer window (current-buffer))
 	(window--state-put-1 state window nil totals pixelwise)
 	(window--state-put-2 ignore pixelwise))
+      (when (window-live-p window-state-put-selected-window)
+	(select-window window-state-put-selected-window))
       (while window-state-put-stale-windows
 	(let ((window (pop window-state-put-stale-windows)))
-          ;; Avoid that 'window-deletable-p' throws an error if window
+	  ;; Avoid that 'window-deletable-p' throws an error if window
           ;; was already deleted when exiting 'with-temp-buffer' above
           ;; (Bug#54028).
 	  (when (and (window-valid-p window)
                      (eq (window-deletable-p window) t))
 	    (delete-window window))))
+      (when (functionp window-restore-killed-buffer-windows)
+	(funcall window-restore-killed-buffer-windows
+	 frame window-state-put-kept-windows 'state)
+	(setq window-state-put-kept-windows nil))
       (window--check frame))))
 
 (defun window-state-buffers (state)
@@ -7806,6 +7859,10 @@ Action alist entries are:
     window that was selected before calling this function will remain
     selected regardless of which windows were selected afterwards within
     this command.
+ `category' -- If the caller of `display-buffer' passes an alist entry
+   `(category . symbol)' in its action argument, then you can match
+   the displayed buffer by using the same category in the condition
+   part of `display-buffer-alist' entries.
 
 The entries `window-height', `window-width', `window-size' and
 `preserve-size' are applied only when the window used for
@@ -8618,11 +8675,11 @@ buffer.  ALIST is a buffer display action alist as compiled by
   use time is higher than this.
 
 - `window-min-width' specifies a preferred minimum width in
-  canonical frame columns.  If it is the constant `full-width',
+  canonical frame columns.  If it is the symbol `full-width',
   prefer a full-width window.
 
 - `window-min-height' specifies a preferred minimum height in
-  canonical frame lines.  If it is the constant `full-height',
+  canonical frame lines.  If it is the symbol `full-height',
   prefer a full-height window.
 
 If ALIST contains a non-nil `inhibit-same-window' entry, do not
@@ -8749,11 +8806,11 @@ Distinctive features are:
     call.
 
   `window-min-width' specifies a preferred minimum width in
-    canonical frame columns.  If it is the constant `full-width',
+    canonical frame columns.  If it is the symbol `full-width',
     prefer a full-width window.
 
   `window-min-height' specifies a preferred minimum height in
-    canonical frame lines.  If it is the constant `full-height',
+    canonical frame lines.  If it is the symbol `full-height',
     prefer a full-height window.
 
 - If the preceding steps fail, try to pop up a new window on the
@@ -8869,7 +8926,8 @@ currently selected window; otherwise it will be displayed in
 another window."
   (pop-to-buffer buffer display-buffer--same-window-action norecord))
 
-(defcustom display-comint-buffer-action display-buffer--same-window-action
+(defcustom display-comint-buffer-action
+  (append display-buffer--same-window-action '((category . comint)))
   "`display-buffer' action for displaying comint buffers."
   :type display-buffer--action-custom-type
   :risky t
@@ -8877,14 +8935,25 @@ another window."
   :group 'windows
   :group 'comint)
 
+(make-obsolete-variable
+ 'display-comint-buffer-action
+ "use a `(category . comint)' condition in `display-buffer-alist'."
+ "30.1")
+
 (defcustom display-tex-shell-buffer-action '(display-buffer-in-previous-window
-                                             (inhibit-same-window . t))
+                                             (inhibit-same-window . t)
+                                             (category . tex-shell))
   "`display-buffer' action for displaying TeX shell buffers."
   :type display-buffer--action-custom-type
   :risky t
   :version "29.1"
   :group 'windows
   :group 'tex-run)
+
+(make-obsolete-variable
+ 'display-tex-shell-buffer-action
+ "use a `(category . tex-shell)' condition in `display-buffer-alist'."
+ "30.1")
 
 (defun read-buffer-to-switch (prompt)
   "Read the name of a buffer to switch to, prompting with PROMPT.
@@ -9837,8 +9906,8 @@ accessible position."
 			       ;; the bottom is wider than the window.
 			       (* (window-body-height window pixelwise)
 				  (if pixelwise 1 char-height))))
-                         (- total-width
-                            (window-body-width window pixelwise)))))
+                         (- (* total-width (if pixelwise 1 char-width))
+                            (window-body-width window t)))))
 	  (unless pixelwise
 	    (setq width (/ (+ width char-width -1) char-width)))
           (setq width (max min-width (min max-width width)))
@@ -10784,6 +10853,79 @@ displaying that processes's buffer."
                 (set-process-window-size process (cdr size) (car size))))))))))
 
 (add-hook 'window-configuration-change-hook 'window--adjust-process-windows)
+
+
+;;; Window point context
+
+(defun window-point-context-set ()
+  "Set context near the window point.
+Call function specified by `window-point-context-set-function' for every
+live window on the selected frame with that window as sole argument.
+The function called is supposed to return a context of the window's point
+that can be later used as argument for `window-point-context-use-function'.
+Remember the returned context in the window parameter `context'."
+  (walk-windows
+   (lambda (w)
+     (when-let ((fn (buffer-local-value 'window-point-context-set-function
+                                        (window-buffer w)))
+                ((functionp fn))
+                (context (funcall fn w)))
+       (set-window-parameter
+        w 'context (cons (buffer-name (window-buffer w)) context))))
+   'nomini))
+
+(defun window-point-context-use ()
+  "Use context to relocate the window point.
+Call function specified by `window-point-context-use-function' to move the
+window point according to the previously saved context.  For every live
+window on the selected frame this function is called with two arguments:
+the window and the context data structure saved by
+`window-point-context-set-function' in the window parameter `context'.
+The function called is supposed to set the window point to the location
+found by the provided context."
+  (walk-windows
+   (lambda (w)
+     (when-let ((fn (buffer-local-value 'window-point-context-use-function
+                                        (window-buffer w)))
+                ((functionp fn))
+                (context (window-parameter w 'context))
+                ((equal (buffer-name (window-buffer w)) (car context))))
+       (funcall fn w (cdr context))
+       (set-window-parameter w 'context nil)))
+   'nomini))
+
+(add-to-list 'window-persistent-parameters '(context . writable))
+
+(defun window-point-context-set-default-function (w)
+  "Set context of file buffers to the front and rear strings."
+  (with-current-buffer (window-buffer w)
+    (when buffer-file-name
+      (let ((point (window-point w)))
+        `((front-context-string
+           . ,(buffer-substring-no-properties
+               point (min (+ point 16) (point-max))))
+          (rear-context-string
+           . ,(buffer-substring-no-properties
+               point (max (- point 16) (point-min)))))))))
+
+(defun window-point-context-use-default-function (w context)
+  "Restore context of file buffers by the front and rear strings."
+  (with-current-buffer (window-buffer w)
+    (let ((point (window-point w)))
+      (save-excursion
+        (goto-char point)
+        (when-let ((f (alist-get 'front-context-string context))
+                   ((search-forward f (point-max) t)))
+          (goto-char (match-beginning 0))
+          (when-let ((r (alist-get 'rear-context-string context))
+                     ((search-backward r (point-min) t)))
+            (goto-char (match-end 0))
+            (setq point (point)))))
+      (set-window-point w point))))
+
+(defvar window-point-context-set-function 'window-point-context-set-default-function)
+(defvar window-point-context-use-function 'window-point-context-use-default-function)
+
 
 ;; Some of these are in tutorial--default-keys, so update that if you
 ;; change these.

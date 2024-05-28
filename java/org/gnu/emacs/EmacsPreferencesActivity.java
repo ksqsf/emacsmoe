@@ -38,8 +38,9 @@ import android.preference.*;
    option, which would not be possible otherwise, as there is no
    command line on Android.
 
-   Android provides a preferences activity, but it is deprecated.
-   Unfortunately, there is no alternative that looks the same way.  */
+   This file extends a deprecated preferences activity, but no suitable
+   alternative exists that is identical in appearance to system settings
+   forms.  */
 
 @SuppressWarnings ("deprecation")
 public class EmacsPreferencesActivity extends PreferenceActivity
@@ -56,7 +57,8 @@ public class EmacsPreferencesActivity extends PreferenceActivity
     intent = new Intent (this, EmacsActivity.class);
     intent.addFlags (Intent.FLAG_ACTIVITY_NEW_TASK
 		     | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-    intent.putExtra ("org.gnu.emacs.STARTUP_ARGUMENT", "--quick");
+    intent.putExtra (EmacsActivity.EXTRA_STARTUP_ARGUMENTS,
+		     new String[] {"--quick", });
     startActivity (intent);
     System.exit (0);
   }
@@ -73,7 +75,8 @@ public class EmacsPreferencesActivity extends PreferenceActivity
     intent = new Intent (this, EmacsActivity.class);
     intent.addFlags (Intent.FLAG_ACTIVITY_NEW_TASK
 		     | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-    intent.putExtra ("org.gnu.emacs.STARTUP_ARGUMENT", "--debug-init");
+    intent.putExtra (EmacsActivity.EXTRA_STARTUP_ARGUMENTS,
+		     new String[] {"--debug-init", });
     startActivity (intent);
     System.exit (0);
   }

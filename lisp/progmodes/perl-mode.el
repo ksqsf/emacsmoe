@@ -251,7 +251,16 @@
       ;; correctly the \() construct (Bug#11996) as well as references
       ;; to string values.
       ("\\(\\\\\\)['`\"($]" (1 (unless (nth 3 (syntax-ppss))
-                                       (string-to-syntax "."))))
+                                 (string-to-syntax "."))))
+      ;; A "$" in Perl code must escape the next char to protect against
+      ;; misinterpreting Perl's punctuation variables as unbalanced
+      ;; quotes or parens.  This is not needed in strings and broken in
+      ;; the special case of "$\"" (Bug#69604).  Make "$" a punctuation
+      ;; char in strings.
+      ("\\$" (0 (if (save-excursion
+                      (nth 3 (syntax-ppss (match-beginning 0))))
+                    (string-to-syntax ".")
+                  (string-to-syntax "/"))))
       ;; Handle funny names like $DB'stop.
       ("\\$ ?{?\\^?[_[:alpha:]][_[:alnum:]]*\\('\\)[_[:alpha:]]" (1 "_"))
       ;; format statements
@@ -647,7 +656,7 @@ create a new comment."
 ;;; Flymake support
 (defcustom perl-flymake-command '("perl" "-w" "-c")
   "External tool used to check Perl source code.
-This is a non empty list of strings, the checker tool possibly
+This is a non-empty list of strings: the checker tool possibly
 followed by required arguments.  Once launched it will receive
 the Perl source to be checked as its standard input."
   :version "26.1"

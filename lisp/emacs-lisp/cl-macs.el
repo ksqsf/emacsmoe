@@ -2250,7 +2250,7 @@ Like `cl-flet' but the definitions can refer to previous ones.
 ;;;###autoload
 (defmacro cl-labels (bindings &rest body)
   "Make local (recursive) function definitions.
-+BINDINGS is a list of definitions of the form (FUNC ARGLIST BODY...) where
+BINDINGS is a list of definitions of the form (FUNC ARGLIST BODY...) where
 FUNC is the function name, ARGLIST its arguments, and BODY the
 forms of the function body.  FUNC is defined in any BODY, as well
 as FORM, so you can write recursive and mutually recursive
@@ -3010,6 +3010,7 @@ To see the documentation for a defined struct type, use
              ;; All the above is for the following def-form.
              &rest &or symbolp (symbolp &optional def-form &rest sexp))))
   (let* ((name (if (consp struct) (car struct) struct))
+	 (warning nil)
 	 (opts (cdr-safe struct))
 	 (slots nil)
 	 (defaults nil)
@@ -3094,7 +3095,10 @@ To see the documentation for a defined struct type, use
 	       (setq descs (nconc (make-list (car args) '(cl-skip-slot))
 				  descs)))
 	      (t
-	       (error "Structure option %s unrecognized" opt)))))
+	       (setq warning
+	             (macroexp-warn-and-return
+	              (format "Structure option %S unrecognized" opt)
+	              warning nil nil (list opt struct)))))))
     (unless (or include-name type
                 ;; Don't create a bogus parent to `cl-structure-object'
                 ;; while compiling the (cl-defstruct cl-structure-object ..)
@@ -3333,6 +3337,7 @@ To see the documentation for a defined struct type, use
          (cl-struct-define ',name ,docstring ',include-name
                            ',(or type 'record) ,(eq named t) ',descs
                            ',tag-symbol ',tag ',print-auto))
+       ,warning
        ',name)))
 
 ;;; Add cl-struct support to pcase
@@ -3463,49 +3468,23 @@ Of course, we really can't know that for sure, so it's just a heuristic."
 ;; Please keep it in sync with `comp-known-predicates'.
 (pcase-dolist (`(,type . ,pred)
                ;; Mostly kept in alphabetical order.
-               '((array		. arrayp)
-                 (atom		. atom)
-                 (base-char	. characterp)
-                 (bignum	. bignump)
-                 (boolean	. booleanp)
-                 (bool-vector	. bool-vector-p)
-                 (buffer	. bufferp)
-                 (byte-code-function . byte-code-function-p)
-                 (character	. natnump)
-                 (char-table	. char-table-p)
-                 (command	. commandp)
-                 (compiled-function . compiled-function-p)
-                 (hash-table	. hash-table-p)
-                 (cons		. consp)
-                 (fixnum	. fixnump)
-                 (float		. floatp)
-                 (frame		. framep)
-                 (function	. functionp)
-                 (integer	. integerp)
-                 (keyword	. keywordp)
+               ;; These aren't defined via `cl--define-built-in-type'.
+               '((base-char	. characterp) ;Could be subtype of `fixnum'.
+                 (character	. natnump)    ;Could be subtype of `fixnum'.
+                 (command	. commandp)   ;Subtype of closure & subr.
+                 (keyword	. keywordp)   ;Would need `keyword-with-pos`.
+                 (natnum	. natnump)    ;Subtype of fixnum & bignum.
+                 (real		. numberp)    ;Not clear where it would fit.
+                 ;; This one is redundant, but we keep it to silence a
+                 ;; warning during the early bootstrap when `cl-seq.el' gets
+                 ;; loaded before `cl-preloaded.el' is defined.
                  (list		. listp)
-                 (marker	. markerp)
-                 (natnum	. natnump)
-                 (number	. numberp)
-                 (null		. null)
-                 (obarray	. obarrayp)
-                 (overlay	. overlayp)
-                 (process	. processp)
-                 (real		. numberp)
-                 (sequence	. sequencep)
-                 (subr		. subrp)
-                 (string	. stringp)
-                 (symbol	. symbolp)
-                 (vector	. vectorp)
-                 (window	. windowp)
-                 ;; FIXME: Do we really want to consider these types?
-                 (number-or-marker . number-or-marker-p)
-                 (integer-or-marker . integer-or-marker-p)
                  ))
   (put type 'cl-deftype-satisfies pred))
 
 ;;;###autoload
 (define-inline cl-typep (val type)
+  "Return t if VAL is of type TYPE, nil otherwise."
   (inline-letevals (val)
     (pcase (inline-const-val type)
       ((and `(,name . ,args) (guard (get name 'cl-deftype-handler)))

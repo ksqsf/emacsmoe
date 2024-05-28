@@ -72,10 +72,22 @@ Set this variable to nil to suppress warnings altogether, or to
 the symbol `silent' to log warnings but not pop up the *Warnings*
 buffer."
   :type '(choice
-          (const :tag "Do not report warnings" nil)
-          (const :tag "Report and display warnings" t)
-          (const :tag "Report but do not display warnings" silent))
+          (const :tag "Do not report warnings/errors" nil)
+          (const :tag "Report and display warnings/errors" t)
+          (const :tag "Report but do not display warnings/errors" silent))
   :version "28.1")
+
+(defcustom native-comp-async-warnings-errors-kind 'important
+  "Which kind of warnings and errors to report from async native compilation.
+
+Setting this variable to `important' (the default) will report
+only important warnings and all errors.
+Setting this variable to `all' will report all warnings and
+errors."
+  :type '(choice
+          (const :tag "Report all warnings/errors" all)
+          (const :tag "Report important warnings and all errors" important))
+  :version "30.1")
 
 (defcustom native-comp-always-compile nil
   "Non-nil means unconditionally (re-)compile all files."
@@ -184,13 +196,21 @@ processes from `comp-async-compilations'"
       (let ((warning-suppress-types
              (if (eq native-comp-async-report-warnings-errors 'silent)
                  (cons '(comp) warning-suppress-types)
-               warning-suppress-types)))
+               warning-suppress-types))
+            (regexp (if (eq native-comp-async-warnings-errors-kind 'all)
+                        "^.*?\\(?:Error\\|Warning\\): .*$"
+                      (rx bol
+                          (*? nonl)
+                          (or
+                           (seq "Error: " (*? nonl))
+                           (seq "Warning: the function ‘" (1+ (not "’"))
+                                "’ is not known to be defined."))
+                          eol))))
         (with-current-buffer (process-buffer process)
           (save-excursion
             (accept-process-output process)
             (goto-char (or comp-last-scanned-async-output (point-min)))
-            (while (re-search-forward "^.*?\\(?:Error\\|Warning\\): .*$"
-                                      nil t)
+            (while (re-search-forward regexp nil t)
               (display-warning 'comp (match-string 0)))
             (setq comp-last-scanned-async-output (point-max)))))
     (accept-process-output process)))
@@ -213,8 +233,8 @@ display a message."
                        "`comp-files-queue' should be \".el\" files: %s"
                        source-file)
          when (or native-comp-always-compile
-                  load        ; Always compile when the compilation is
-                                        ; commanded for late load.
+                  load ; Always compile when the compilation is
+                       ; commanded for late load.
                   ;; Skip compilation if `comp-el-to-eln-filename' fails
                   ;; to find a writable directory.
                   (with-demoted-errors "Async compilation :%S"
@@ -236,6 +256,7 @@ display a message."
                                              load-path
                                              backtrace-line-length
                                              byte-compile-warnings
+                                             comp-sanitizer-emit
                                              ;; package-load-list
                                              ;; package-user-dir
                                              ;; package-directory-list
@@ -344,13 +365,15 @@ Return the trampoline if found or nil otherwise."
   (when (memq subr-name comp-warn-primitives)
     (warn "Redefining `%s' might break native compilation of trampolines."
           subr-name))
-  (unless (or (null native-comp-enable-subr-trampolines)
-              (memq subr-name native-comp-never-optimize-functions)
-              (gethash subr-name comp-installed-trampolines-h))
-    (cl-assert (subr-primitive-p (symbol-function subr-name)))
-    (when-let ((trampoline (or (comp-trampoline-search subr-name)
-                               (comp-trampoline-compile subr-name))))
-      (comp--install-trampoline subr-name trampoline))))
+  (let ((subr (symbol-function subr-name)))
+    (unless (or (not (string= subr-name (subr-name subr))) ;; (bug#69573)
+                (null native-comp-enable-subr-trampolines)
+                (memq subr-name native-comp-never-optimize-functions)
+                (gethash subr-name comp-installed-trampolines-h))
+      (cl-assert (subr-primitive-p subr))
+      (when-let ((trampoline (or (comp-trampoline-search subr-name)
+                                 (comp-trampoline-compile subr-name))))
+        (comp--install-trampoline subr-name trampoline)))))
 
 ;;;###autoload
 (defun native--compile-async (files &optional recursively load selector)

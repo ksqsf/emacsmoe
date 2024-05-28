@@ -50,6 +50,34 @@
   (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "1d")))
     (should (equal (erc--read-time-period "foo: ") 86400))))
 
+(ert-deftest erc--format-time-period ()
+  (should (equal (erc--format-time-period 59) "59s"))
+  (should (equal (erc--format-time-period 59.9) "59s"))
+  (should (equal (erc--format-time-period 60) "1m0s"))
+  (should (equal (erc--format-time-period 119) "1m59s"))
+  (should (equal (erc--format-time-period 119.9) "1m59s"))
+  (should (equal (erc--format-time-period 120.9) "2m0s"))
+  (should (equal (erc--format-time-period 3599.9) "59m59s"))
+  (should (equal (erc--format-time-period 3600) "1h0m0s")))
+
+;; This asserts that the first pattern on file matching a supplied
+;; `user' parameter will be removed after confirmation.
+(ert-deftest erc-cmd-UNIGNORE ()
+  ;; XXX these functions mutate `erc-ignore-list' via `delete'.
+  (should (local-variable-if-set-p 'erc-ignore-list))
+  (erc-tests-common-make-server-buf)
+
+  (setq erc-ignore-list (list ".")) ; match anything
+  (ert-simulate-keys (list ?\r)
+    (erc-cmd-IGNORE "abc"))
+  (should (equal erc-ignore-list (list "abc" ".")))
+
+  (cl-letf (((symbol-function 'y-or-n-p) #'always))
+    (erc-cmd-UNIGNORE "abcdef")
+    (should (equal erc-ignore-list (list ".")))
+    (erc-cmd-UNIGNORE "foo"))
+  (should-not erc-ignore-list))
+
 (ert-deftest erc-with-all-buffers-of-server ()
   (let (proc-exnet
         proc-onet
@@ -302,6 +330,7 @@
                                (cl-incf counter))))
          erc-accidental-paste-threshold-seconds
          erc-insert-modify-hook
+         erc-send-modify-hook
          (erc-last-input-time 0)
          (erc-modules (remq 'stamp erc-modules))
          (erc-send-input-line-function #'ignore)
@@ -382,7 +411,7 @@
           (should-not (search-forward (rx (or "9" "10") ">") nil t)))))
 
     (ert-info ("Query buffer")
-      (with-current-buffer (get-buffer "bob")
+      (with-current-buffer "bob"
         (goto-char erc-insert-marker)
         (should (looking-at-p "bob@ServNet 14>"))
         (goto-char erc-input-marker)
@@ -1199,6 +1228,35 @@
 
   (erc-tests-common-kill-buffers))
 
+(ert-deftest erc-query-buffer-p ()
+  ;; Nil in a non-ERC buffer.
+  (should-not (erc-query-buffer-p))
+  (should-not (erc-query-buffer-p (current-buffer)))
+  (should-not (erc-query-buffer-p (buffer-name)))
+
+  (erc-tests-common-make-server-buf)
+  ;; Nil in a server buffer.
+  (should-not (erc-query-buffer-p))
+  (should-not (erc-query-buffer-p (current-buffer)))
+  (should-not (erc-query-buffer-p (buffer-name)))
+
+  ;; Nil in a channel buffer.
+  (with-current-buffer (erc--open-target "#chan")
+    (should-not (erc-query-buffer-p))
+    (should-not (erc-query-buffer-p (current-buffer)))
+    (should-not (erc-query-buffer-p (buffer-name))))
+
+  ;; Non-nil in a query buffer.
+  (with-current-buffer (erc--open-target "alice")
+    (should (erc-query-buffer-p))
+    (should (erc-query-buffer-p (current-buffer)))
+    (should (erc-query-buffer-p (buffer-name))))
+
+  (should (erc-query-buffer-p (get-buffer "alice")))
+  (should (erc-query-buffer-p "alice"))
+
+  (erc-tests-common-kill-buffers))
+
 (ert-deftest erc--valid-local-channel-p ()
   (ert-info ("Local channels not supported")
     (let ((erc--isupport-params (make-hash-table)))
@@ -1211,6 +1269,7 @@
       (should-not (erc--valid-local-channel-p "#chan"))
       (should (erc--valid-local-channel-p "&local")))))
 
+;; FIXME remove this because it serves no purpose.  See bug#71178.
 (ert-deftest erc--restore-initialize-priors ()
   (unless (>= emacs-major-version 28)
     (ert-skip "Lisp nesting exceeds `max-lisp-eval-depth'"))
@@ -1899,7 +1958,48 @@
    (lambda (arg)
      (should (equal '(3 . 11) (erc--get-inserted-msg-bounds arg))))))
 
-(ert-deftest erc--delete-inserted-message ()
+(ert-deftest erc--insert-before-markers-transplanting-hidden ()
+  (with-current-buffer (get-buffer-create "*erc-test*")
+    (erc-mode)
+    (erc-tests-common-prep-for-insertion)
+
+    ;; Create a message that has a foreign invisibility property on
+    ;; its trailing newline that's not claimed by the next message.
+    (let ((erc-insert-post-hook
+           (lambda ()
+             (put-text-property (point-min) (point-max) 'invisible 'b))))
+      (erc-display-message nil 'notice (current-buffer) "before"))
+    (should (eq 'b (get-text-property (1- erc-insert-marker) 'invisible)))
+
+    ;; Insert a message that's hidden with `erc--hide-message'.  It
+    ;; advertises `invisible' value `a', applied on the trailing
+    ;; newline of the previous message.
+    (let ((erc-insert-post-hook (lambda () (erc--hide-message 'a))))
+      (erc-display-message nil 'notice (current-buffer) "after"))
+
+    (goto-char (point-min))
+    (should (search-forward "*** before\n" nil t))
+    (should (equal '(a b) (get-text-property (1- (point)) 'invisible)))
+
+    ;;  Splice in a new message.
+    (let ((erc--insert-line-function
+           #'erc--insert-before-markers-transplanting-hidden)
+          (erc--insert-marker (copy-marker (point))))
+      (goto-char (point-max))
+      (erc-display-message nil 'notice (current-buffer) "middle"))
+
+    (goto-char (point-min))
+    (should (search-forward "*** before\n" nil t))
+    (should (eq 'b (get-text-property (1- (point)) 'invisible)))
+    (should (looking-at (rx "*** middle\n")))
+    (should (eq 'a (get-text-property (pos-eol) 'invisible)))
+    (forward-line)
+    (should (looking-at (rx "*** after\n")))
+
+    (setq buffer-invisibility-spec nil)
+    (when noninteractive (kill-buffer))))
+
+(ert-deftest erc--delete-inserted-message-naively ()
   (erc-mode)
   (erc--initialize-markers (point) nil)
   ;; Put unique invisible properties on the line endings.
@@ -1917,7 +2017,7 @@
     (should (eq 'datestamp (get-text-property (point) 'erc--msg)))
     (should (eq (point) (field-beginning (1+ (point)))))
 
-    (erc--delete-inserted-message (point))
+    (erc--delete-inserted-message-naively (point))
 
     ;; Preceding line ending clobbered, replaced by trailing.
     (should (looking-back (rx "*** one\n")))
@@ -1933,7 +2033,7 @@
           (p (point)))
       (set-marker-insertion-type m t)
       (goto-char (point-max))
-      (erc--delete-inserted-message p)
+      (erc--delete-inserted-message-naively p)
       (should (= (marker-position n) p))
       (should (= (marker-position m) p))
       (goto-char p)
@@ -1947,7 +2047,7 @@
     (should (looking-at (rx "*** three\n")))
     (with-suppressed-warnings ((obsolete erc-legacy-invisible-bounds-p))
       (let ((erc-legacy-invisible-bounds-p t))
-        (erc--delete-inserted-message (point))))
+        (erc--delete-inserted-message-naively (point))))
     (should (looking-at (rx "*** four\n"))))
 
   (ert-info ("Deleting most recent message preserves markers")
@@ -1957,7 +2057,7 @@
       (should (equal "*** four\n" (buffer-substring p erc-insert-marker)))
       (set-marker-insertion-type m t)
       (goto-char (point-max))
-      (erc--delete-inserted-message p)
+      (erc--delete-inserted-message-naively p)
       (should (= (marker-position m) p))
       (should (= (marker-position n) p))
       (goto-char p)
@@ -2012,6 +2112,13 @@
       (should (erc--check-msg-prop 'b props)))
     (let ((v '(42 y)))
       (should-not (erc--check-msg-prop 'b v)))))
+
+(ert-deftest erc--memq-msg-prop ()
+  (let ((erc--msg-props (map-into '((a . 1) (b x y)) 'hash-table)))
+    (should-not (erc--memq-msg-prop 'a 1))
+    (should-not (erc--memq-msg-prop 'b 'z))
+    (should (erc--memq-msg-prop 'b 'x))
+    (should (erc--memq-msg-prop 'b 'y))))
 
 (ert-deftest erc--merge-prop ()
   (with-current-buffer (get-buffer-create "*erc-test*")
@@ -2232,6 +2339,58 @@
     (when noninteractive
       (kill-buffer))))
 
+(ert-deftest erc--restore-important-text-props ()
+  (erc-mode)
+  (let ((erc--msg-props (map-into '((erc--important-prop-names a))
+                                  'hash-table)))
+    (insert (propertize "foo" 'a 'A 'b 'B 'erc--important-props '(a A))
+            " "
+            (propertize "bar" 'c 'C 'a 'A 'b 'B
+                        'erc--important-props '(a A c C)))
+
+    ;; Attempt to restore a and c when only a is registered.
+    (remove-list-of-text-properties (point-min) (point-max) '(a c))
+    (erc--restore-important-text-props '(a c))
+    (should (erc-tests-common-equal-with-props
+             (buffer-string)
+             #("foo bar"
+               0 3 (a A b B erc--important-props (a A))
+               4 7 (a A b B erc--important-props (a A c C)))))
+
+    ;; Add d between 3 and 6.
+    (erc--reserve-important-text-props 3 6 '(d D))
+    (put-text-property 3 6 'd 'D)
+    (should (erc-tests-common-equal-with-props
+             (buffer-string)
+             #("foo bar" ; #1
+               0 2 (a A b B erc--important-props (a A))
+               2 3 (d D a A b B erc--important-props (d D a A))
+               3 4 (d D erc--important-props (d D))
+               4 5 (d D a A b B erc--important-props (d D a A c C))
+               5 7 (a A b B erc--important-props (a A c C)))))
+    ;; Remove a and d, and attempt to restore d.
+    (remove-list-of-text-properties (point-min) (point-max) '(a d))
+    (erc--restore-important-text-props '(d))
+    (should (erc-tests-common-equal-with-props
+             (buffer-string)
+             #("foo bar"
+               0 2 (b B erc--important-props (a A))
+               2 3 (d D b B erc--important-props (d D a A))
+               3 4 (d D erc--important-props (d D))
+               4 5 (d D b B erc--important-props (d D a A c C))
+               5 7 (b B erc--important-props (a A c C)))))
+
+    ;; Restore a only.
+    (erc--restore-important-text-props '(a))
+    (should (erc-tests-common-equal-with-props
+             (buffer-string)
+             #("foo bar" ; same as #1 above
+               0 2 (a A b B erc--important-props (a A))
+               2 3 (d D a A b B erc--important-props (d D a A))
+               3 4 (d D erc--important-props (d D))
+               4 5 (d D a A b B erc--important-props (d D a A c C))
+               5 7 (a A b B erc--important-props (a A c C)))))))
+
 (ert-deftest erc--split-string-shell-cmd ()
 
   ;; Leading and trailing space
@@ -2376,7 +2535,7 @@
         erc-kill-channel-hook erc-kill-server-hook erc-kill-buffer-hook)
     (cl-letf (((symbol-function 'erc-display-message)
                (lambda (_ _ _ msg &rest args)
-                 (push (apply #'erc-format-message msg args) calls)))
+                 (ignore (push (apply #'erc-format-message msg args) calls))))
               ((symbol-function 'erc-server-send)
                (lambda (line _) (push line calls)))
               ((symbol-function 'erc-server-buffer)
@@ -3508,9 +3667,9 @@
 
                       (define-minor-mode erc-mname-mode
                         "Toggle ERC mname mode.
-With a prefix argument ARG, enable mname if ARG is positive, and
-disable it otherwise.  If called from Lisp, enable the mode if
-ARG is omitted or nil.
+If called interactively, enable `erc-mname-mode' if ARG is
+positive, and disable it otherwise.  If called from Lisp, enable
+the mode if ARG is omitted or nil.
 
 Some docstring."
                         :global t
@@ -3565,10 +3724,10 @@ Some docstring."
     (should (equal got
                    `(progn
                       (define-minor-mode erc-mname-mode
-                        "Toggle ERC mname mode.
-With a prefix argument ARG, enable mname if ARG is positive, and
-disable it otherwise.  If called from Lisp, enable the mode if
-ARG is omitted or nil.
+                        "Toggle ERC mname mode locally.
+If called interactively, enable `erc-mname-mode' if ARG is
+positive, and disable it otherwise.  If called from Lisp, enable
+the mode if ARG is omitted or nil.
 
 Some docstring."
                         :global nil
@@ -3579,7 +3738,7 @@ Some docstring."
                             (erc-mname-disable))))
 
                       (defun erc-mname-enable (&optional ,arg-en)
-                        "Enable ERC mname mode.
+                        "Enable ERC mname mode locally.
 When called interactively, do so in all buffers for the current
 connection."
                         (interactive "p")
@@ -3592,7 +3751,7 @@ connection."
                             (ignore a) (ignore b))))
 
                       (defun erc-mname-disable (&optional ,arg-dis)
-                        "Disable ERC mname mode.
+                        "Disable ERC mname mode locally.
 When called interactively, do so in all buffers for the current
 connection."
                         (interactive "p")

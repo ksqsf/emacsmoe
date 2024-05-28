@@ -47,8 +47,16 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "w32inevt.h"
 
 #ifdef WINDOWSNT
+/* mingw.org's MinGW headers mistakenly omit this enumeration: */
+# ifndef MINGW_W64
+typedef enum _WTS_VIRTUAL_CLASS {
+  WTSVirtualClientData,
+  WTSVirtualFileHandle
+} WTS_VIRTUAL_CLASS;
+# endif
 #include <mbstring.h>
 #include <mbctype.h>	/* for _getmbcp */
+#include <wtsapi32.h>	/* for WTS(Un)RegisterSessionNotification */
 #endif /* WINDOWSNT */
 
 #if CYGWIN
@@ -204,6 +212,10 @@ typedef HRESULT (WINAPI * SetWindowTheme_Proc)
 typedef HRESULT (WINAPI * DwmSetWindowAttribute_Proc)
   (HWND hwnd, DWORD dwAttribute, IN LPCVOID pvAttribute, DWORD cbAttribute);
 
+typedef BOOL (WINAPI * WTSRegisterSessionNotification_Proc)
+  (HWND hwnd, DWORD dwFlags);
+typedef BOOL (WINAPI * WTSUnRegisterSessionNotification_Proc) (HWND hwnd);
+
 TrackMouseEvent_Proc track_mouse_event_fn = NULL;
 ImmGetCompositionString_Proc get_composition_string_fn = NULL;
 ImmGetContext_Proc get_ime_context_fn = NULL;
@@ -220,6 +232,8 @@ IsDebuggerPresent_Proc is_debugger_present = NULL;
 SetThreadDescription_Proc set_thread_description = NULL;
 SetWindowTheme_Proc SetWindowTheme_fn = NULL;
 DwmSetWindowAttribute_Proc DwmSetWindowAttribute_fn = NULL;
+WTSUnRegisterSessionNotification_Proc WTSUnRegisterSessionNotification_fn = NULL;
+WTSRegisterSessionNotification_Proc WTSRegisterSessionNotification_fn = NULL;
 
 extern AppendMenuW_Proc unicode_append_menu;
 
@@ -291,10 +305,12 @@ static unsigned int sound_type = 0xFFFFFFFF;
 /* Special virtual key code for indicating "any" key.  */
 #define VK_ANY 0xFF
 
-#ifndef WM_WTSSESSION_CHANGE
+#ifdef WINDOWSNT
+# ifndef WM_WTSSESSION_CHANGE
 /* 32-bit MinGW does not define these constants.  */
-# define WM_WTSSESSION_CHANGE  0x02B1
-# define WTS_SESSION_LOCK      0x7
+#  define WM_WTSSESSION_CHANGE  0x02B1
+#  define WTS_SESSION_LOCK      0x7
+# endif
 #endif
 
 #ifndef WS_EX_NOACTIVATE
@@ -307,6 +323,7 @@ static struct
   int hook_count; /* counter, if several windows are created */
   HHOOK hook;     /* hook handle */
   HWND console;   /* console window handle */
+  HWND notified_wnd; /* window that receives session notifications */
 
   int lwindown;      /* Left Windows key currently pressed (and hooked) */
   int rwindown;      /* Right Windows key currently pressed (and hooked) */
@@ -2744,7 +2761,7 @@ funhook (int code, WPARAM w, LPARAM l)
 /* Set up the hook; can be called several times, with matching
    remove_w32_kbdhook calls.  */
 void
-setup_w32_kbdhook (void)
+setup_w32_kbdhook (HWND hwnd)
 {
   kbdhook.hook_count++;
 
@@ -2800,6 +2817,15 @@ setup_w32_kbdhook (void)
       /* Set the hook.  */
       kbdhook.hook = SetWindowsHookEx (WH_KEYBOARD_LL, funhook,
 				       GetModuleHandle (NULL), 0);
+
+      /* Register session notifications so we get notified about the
+	 computer being locked.  */
+      kbdhook.notified_wnd = NULL;
+      if (hwnd != NULL && WTSRegisterSessionNotification_fn != NULL)
+	{
+	  WTSRegisterSessionNotification_fn (hwnd, NOTIFY_FOR_THIS_SESSION);
+	  kbdhook.notified_wnd = hwnd;
+	}
     }
 }
 
@@ -2811,7 +2837,11 @@ remove_w32_kbdhook (void)
   if (kbdhook.hook_count == 0 && w32_kbdhook_active)
     {
       UnhookWindowsHookEx (kbdhook.hook);
+      if (kbdhook.notified_wnd != NULL
+	  && WTSUnRegisterSessionNotification_fn != NULL)
+	  WTSUnRegisterSessionNotification_fn (kbdhook.notified_wnd);
       kbdhook.hook = NULL;
+      kbdhook.notified_wnd = NULL;
     }
 }
 #endif	/* WINDOWSNT */
@@ -2884,13 +2914,12 @@ check_w32_winkey_state (int vkey)
     }
   return 0;
 }
-#endif	/* WINDOWSNT */
 
 /* Reset the keyboard hook state.  Locking the workstation with Win-L
    leaves the Win key(s) "down" from the hook's point of view - the
    keyup event is never seen.  Thus, this function must be called when
    the system is locked.  */
-static void
+void
 reset_w32_kbdhook_state (void)
 {
   kbdhook.lwindown = 0;
@@ -2900,6 +2929,7 @@ reset_w32_kbdhook_state (void)
   kbdhook.suppress_lone = 0;
   kbdhook.winseen = 0;
 }
+#endif	/* WINDOWSNT */
 
 /* GetKeyState and MapVirtualKey on Windows 95 do not actually distinguish
    between left and right keys as advertised.  We test for this
@@ -4129,6 +4159,47 @@ deliver_wm_chars (int do_translate, HWND hwnd, UINT msg, UINT wParam,
   return 0;
 }
 
+/* Maybe pass session notification registration to another frame.  If
+   the frame with window handle HWND is deleted, we must pass the
+   notifications to some other frame, if they have been sent to this
+   frame before and have not already been passed on.  If there is no
+   other frame, do nothing.  */
+
+#ifdef WINDOWSNT
+static void
+maybe_pass_notification (HWND hwnd)
+{
+  if (hwnd == kbdhook.notified_wnd
+      && kbdhook.hook_count > 0 && w32_kbdhook_active)
+    {
+      Lisp_Object tail, frame;
+      struct frame *f;
+      bool found_frame = false;
+
+      FOR_EACH_FRAME (tail, frame)
+	{
+	  f = XFRAME (frame);
+	  if (FRAME_W32_P (f) && FRAME_OUTPUT_DATA (f) != NULL
+	      && FRAME_W32_WINDOW (f) != hwnd)
+	    {
+	      found_frame = true;
+	      break;
+	    }
+	}
+
+      if (found_frame && WTSUnRegisterSessionNotification_fn != NULL
+	  && WTSRegisterSessionNotification_fn != NULL)
+	{
+	  /* There is another frame, pass on the session notification.  */
+	  HWND next_wnd = FRAME_W32_WINDOW (f);
+	  WTSUnRegisterSessionNotification_fn (hwnd);
+	  WTSRegisterSessionNotification_fn (next_wnd, NOTIFY_FOR_THIS_SESSION);
+	  kbdhook.notified_wnd = next_wnd;
+	}
+    }
+}
+#endif	/* WINDOWSNT */
+
 /* Main window procedure */
 
 static LRESULT CALLBACK
@@ -5301,23 +5372,29 @@ w32_wnd_proc (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 #ifdef WINDOWSNT
     case WM_CREATE:
-      setup_w32_kbdhook ();
+      setup_w32_kbdhook (hwnd);
       goto dflt;
 #endif
 
     case WM_DESTROY:
 #ifdef WINDOWSNT
+      maybe_pass_notification (hwnd);
       remove_w32_kbdhook ();
 #endif
       CoUninitialize ();
       return 0;
 
+#ifdef WINDOWSNT
     case WM_WTSSESSION_CHANGE:
       if (wParam == WTS_SESSION_LOCK)
         reset_w32_kbdhook_state ();
       goto dflt;
+#endif
 
     case WM_CLOSE:
+#ifdef WINDOWSNT
+      maybe_pass_notification (hwnd);
+#endif
       wmsg.dwModifiers = w32_get_modifiers ();
       my_post_msg (&wmsg, hwnd, msg, wParam, lParam);
       return 0;
@@ -6462,7 +6539,7 @@ DEFUN ("x-display-backing-store", Fx_display_backing_store,
        doc: /* SKIP: real doc in xfns.c.  */)
   (Lisp_Object display)
 {
-  return intern ("not-useful");
+  return Qnot_useful;
 }
 
 DEFUN ("x-display-visual-class", Fx_display_visual_class,
@@ -6474,13 +6551,13 @@ DEFUN ("x-display-visual-class", Fx_display_visual_class,
   Lisp_Object result = Qnil;
 
   if (dpyinfo->has_palette)
-      result = intern ("pseudo-color");
+      result = Qpseudo_color;
   else if (dpyinfo->n_planes * dpyinfo->n_cbits == 1)
-      result = intern ("static-gray");
+      result = Qstatic_gray;
   else if (dpyinfo->n_planes * dpyinfo->n_cbits == 4)
-      result = intern ("static-color");
+      result = Qstatic_color;
   else if (dpyinfo->n_planes * dpyinfo->n_cbits > 8)
-      result = intern ("true-color");
+      result = Qtrue_color;
 
   return result;
 }
@@ -6696,17 +6773,17 @@ SOUND is nil to use the normal beep.  */)
 
   if (NILP (sound))
       sound_type = 0xFFFFFFFF;
-  else if (EQ (sound, intern ("asterisk")))
+  else if (EQ (sound, Qasterisk))
       sound_type = MB_ICONASTERISK;
-  else if (EQ (sound, intern ("exclamation")))
+  else if (EQ (sound, Qexclamation))
       sound_type = MB_ICONEXCLAMATION;
-  else if (EQ (sound, intern ("hand")))
+  else if (EQ (sound, Qhand))
       sound_type = MB_ICONHAND;
-  else if (EQ (sound, intern ("question")))
+  else if (EQ (sound, Qquestion))
       sound_type = MB_ICONQUESTION;
-  else if (EQ (sound, intern ("ok")))
+  else if (EQ (sound, Qok))
       sound_type = MB_OK;
-  else if (EQ (sound, intern ("silent")))
+  else if (EQ (sound, Qsilent))
       sound_type = MB_EMACS_SILENT;
   else
       sound_type = 0xFFFFFFFF;
@@ -6777,7 +6854,7 @@ DEFUN ("x-open-connection", Fx_open_connection, Sx_open_connection,
     if (NILP (Ffile_readable_p (color_file)))
       color_file =
 	Fexpand_file_name (build_string ("rgb.txt"),
-			   Fsymbol_value (intern ("data-directory")));
+			   Fsymbol_value (Qdata_directory));
 
     Vw32_color_map = Fx_load_color_file (color_file);
   }
@@ -7672,8 +7749,8 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
 
  start_timer:
   /* Let the tip disappear after timeout seconds.  */
-  tip_timer = call3 (intern ("run-at-time"), timeout, Qnil,
-		     intern ("x-hide-tip"));
+  tip_timer = call3 (Qrun_at_time, timeout, Qnil,
+		     Qx_hide_tip);
 
   return unbind_to (count, Qnil);
 }
@@ -8111,15 +8188,14 @@ DEFUN ("x-file-dialog", Fx_file_dialog, Sx_file_dialog, 2, 5, 0,
       filename = Qnil;
     /* An error occurred, fallback on reading from the mini-buffer.  */
     else
-      filename = Fcompleting_read (
-	orig_prompt,
-	intern ("read-file-name-internal"),
-	orig_dir,
-	mustmatch,
-	orig_dir,
-	Qfile_name_history,
-	default_filename,
-	Qnil);
+      filename = Fcompleting_read (orig_prompt,
+				   Qread_file_name_internal,
+				   orig_dir,
+				   mustmatch,
+				   orig_dir,
+				   Qfile_name_history,
+				   default_filename,
+				   Qnil);
   }
 
   /* Make "Cancel" equivalent to C-g.  */
@@ -8146,7 +8222,7 @@ DEFUN ("system-move-file-to-trash", Fsystem_move_file_to_trash,
   if (!NILP (Ffile_directory_p (filename))
       && NILP (Ffile_symlink_p (filename)))
     {
-      operation = intern ("delete-directory");
+      operation = Qdelete_directory;
       filename = Fdirectory_file_name (filename);
     }
 
@@ -8850,11 +8926,11 @@ to change the state.  */)
   int vk_code;
   LPARAM lparam;
 
-  if (EQ (key, intern ("capslock")))
+  if (EQ (key, Qcapslock))
     vk_code = VK_CAPITAL;
-  else if (EQ (key, intern ("kp-numlock")))
+  else if (EQ (key, Qkp_numlock))
     vk_code = VK_NUMLOCK;
-  else if (EQ (key, intern ("scroll")))
+  else if (EQ (key, Qscroll))
     vk_code = VK_SCROLL;
   else
     return Qnil;
@@ -10637,6 +10713,7 @@ syms_of_w32fns (void)
   DEFSYM (Qtip_frame, "tip-frame");
   DEFSYM (Qassq_delete_all, "assq-delete-all");
   DEFSYM (Qunicode_sip, "unicode-sip");
+  DEFSYM (Qread_file_name_internal, "read-file-name-internal");
 #if defined WINDOWSNT && !defined HAVE_DBUS
   DEFSYM (QCicon, ":icon");
   DEFSYM (QCtip, ":tip");
@@ -11031,6 +11108,23 @@ keys when IME input is received.  */);
   defsubr (&Ssystem_move_file_to_trash);
   defsubr (&Sw32_set_wallpaper);
 #endif
+
+  DEFSYM (Qnot_useful, "not-useful");
+  DEFSYM (Qpseudo_color, "pseudo-color");
+  DEFSYM (Qstatic_gray, "static-gray");
+  DEFSYM (Qstatic_color, "static-color");
+  DEFSYM (Qtrue_color, "true-color");
+  DEFSYM (Qasterisk, "asterisk");
+  DEFSYM (Qexclamation, "exclamation");
+  DEFSYM (Qquestion, "question");
+  DEFSYM (Qok, "ok");
+  DEFSYM (Qsilent, "silent");
+  DEFSYM (Qdata_directory, "data-directory");
+  DEFSYM (Qrun_at_time, "run-at-time");
+  DEFSYM (Qx_hide_tip, "x-hide-tip");
+  DEFSYM (Qcapslock, "capslock");
+  DEFSYM (Qkp_numlock, "kp-numlock");
+  DEFSYM (Qscroll, "scroll");
 }
 
 
@@ -11334,6 +11428,14 @@ globals_of_w32fns (void)
     get_proc_addr (hm_kernel32, "IsDebuggerPresent");
   set_thread_description = (SetThreadDescription_Proc)
     get_proc_addr (hm_kernel32, "SetThreadDescription");
+
+#ifdef WINDOWSNT
+  HMODULE wtsapi32_lib = LoadLibrary ("wtsapi32.dll");
+  WTSRegisterSessionNotification_fn = (WTSRegisterSessionNotification_Proc)
+    get_proc_addr (wtsapi32_lib, "WTSRegisterSessionNotification");
+  WTSUnRegisterSessionNotification_fn = (WTSUnRegisterSessionNotification_Proc)
+    get_proc_addr (wtsapi32_lib, "WTSUnRegisterSessionNotification");
+#endif
 
   /* Support OS dark mode on Windows 10 version 1809 and higher.
      See `w32_applytheme' which uses appropriate APIs per version of Windows.
