@@ -124,8 +124,8 @@ gaussian_blur (cairo_surface_t *s, int w, int h, double r)
   cairo_surface_t *t = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, w, h);
   v4uc *sdata, *tdata;
 
-  sdata = cairo_image_surface_get_data (s);
-  tdata = cairo_image_surface_get_data (t);
+  sdata = (v4uc *) cairo_image_surface_get_data (s);
+  tdata = (v4uc *) cairo_image_surface_get_data (t);
 
   /* Inline box_blur to reduce memory copying. */
   box_blur_h (sdata, tdata, w, h, (boxes[0] - 1.0) / 2.0);
