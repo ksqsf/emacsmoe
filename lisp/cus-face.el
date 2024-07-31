@@ -141,7 +141,10 @@
 		   (const :format "" :value :style)
 		   (choice :tag "Style"
 			   (const :tag "Line" line)
-			   (const :tag "Wave" wave))
+			   (const :tag "Double line" double-line)
+			   (const :tag "Wave" wave)
+			   (const :tag "Dots" dots)
+			   (const :tag "Dashes" dashes))
                    (const :format "" :value :position)
                    (choice :tag "Position"
                            (const :tag "At Default Position" nil)
@@ -185,7 +188,6 @@
 	     (const :tag "Off" nil)
 	     (const :tag "On" t)
 	     (color :tag "Colored")))
-
     (:box
      ;; Fixme: this can probably be done better.
      (choice :tag "Box around text"
@@ -271,6 +273,10 @@
 	     :help-echo "Control whether attributes should be extended after EOL."
 	     (const :tag "Off" nil)
 	     (const :tag "On" t)))
+
+    (:shadow
+     (number :tag "radius" :value 10.0))
+
     (:inherit
      (repeat :tag "Inherit"
 	     :help-echo "List of faces to inherit attributes from."

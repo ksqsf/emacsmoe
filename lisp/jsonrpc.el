@@ -4,7 +4,7 @@
 
 ;; Author: João Távora <joaotavora@gmail.com>
 ;; Keywords: processes, languages, extensions
-;; Version: 1.0.24
+;; Version: 1.0.25
 ;; Package-Requires: ((emacs "25.2"))
 
 ;; This is a GNU ELPA :core package.  Avoid functionality that is not
@@ -591,15 +591,18 @@ connection object, called when the process dies.")
 (cl-defmethod jsonrpc-shutdown ((conn jsonrpc-process-connection)
                                 &optional cleanup)
   "Wait for JSONRPC connection CONN to shutdown.
-With optional CLEANUP, kill any associated buffers."
+With optional CLEANUP, kill any associated buffers.
+If CONN is not shutdown within a reasonable amount of time, warn
+and delete the network process."
   (unwind-protect
       (cl-loop
        with proc = (jsonrpc--process conn) for i from 0
        while (not (process-get proc 'jsonrpc-sentinel-cleanup-started))
        unless (zerop i) do
        (jsonrpc--warn "Sentinel for %s still hasn't run, deleting it!" proc)
-       do
        (delete-process proc)
+       do
+       ;; Let sentinel have a chance to run
        (accept-process-output nil 0.1))
     (when cleanup
       (kill-buffer (process-buffer (jsonrpc--process conn)))
@@ -760,10 +763,11 @@ With optional CLEANUP, kill any associated buffers."
                                 (setq message
                                       (plist-put message :jsonrpc-json
                                                  (buffer-string)))
-                                (process-put proc 'jsonrpc-mqueue
-                                             (nconc (process-get proc
-                                                                 'jsonrpc-mqueue)
-                                                    (list message)))))
+                                ;; Put new messages at the front of the queue,
+                                ;; this is correct as the order is reversed
+                                ;; before putting the timers on `timer-list'.
+                                (push message
+                                      (process-get proc 'jsonrpc-mqueue))))
                           (goto-char message-end)
                           (let ((inhibit-read-only t))
                             (delete-region (point-min) (point)))
@@ -782,11 +786,20 @@ With optional CLEANUP, kill any associated buffers."
           ;; non-locally (typically the reply to a request), so do
           ;; this all this processing in top-level loops timer.
           (cl-loop
+           ;; `timer-activate' orders timers by time, which is an
+           ;; very expensive operation when jsonrpc-mqueue is large,
+           ;; therefore the time object is reused for each timer
+           ;; created.
+           with time = (current-time)
            for msg = (pop (process-get proc 'jsonrpc-mqueue)) while msg
-           do (run-at-time 0 nil
-                           (lambda (m) (with-temp-buffer
-                                         (jsonrpc-connection-receive conn m)))
-                           msg)))))))
+           do (let ((timer (timer-create)))
+                (timer-set-time timer time)
+                (timer-set-function timer
+                                    (lambda (conn msg)
+                                      (with-temp-buffer
+                                        (jsonrpc-connection-receive conn msg)))
+                                    (list conn msg))
+                (timer-activate timer))))))))
 
 (defun jsonrpc--remove (conn id &optional deferred-spec)
   "Cancel CONN's continuations for ID, including its timer, if it exists.

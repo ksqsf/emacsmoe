@@ -1612,7 +1612,7 @@ archive file and the source category is deleted."
 	 (garchive (concat (file-name-sans-extension gfile) ".toda"))
 	 (archived-count (todo-get-count 'archived))
 	 here)
-    (with-current-buffer (get-buffer (find-file-noselect tfile))
+    (with-current-buffer (find-file-noselect tfile)
       (widen)
       (let* ((inhibit-read-only t)
 	     (cbeg (progn
@@ -1638,7 +1638,7 @@ archive file and the source category is deleted."
 	     (todo-count (todo-get-count 'todo cat))
 	     (done-count (todo-get-count 'done cat)))
 	;; Merge into goal todo category.
-	(with-current-buffer (get-buffer (find-file-noselect gfile))
+	(with-current-buffer (find-file-noselect gfile)
 	  (unless (derived-mode-p 'todo-mode) (todo-mode))
 	  (widen)
 	  (goto-char (point-min))
@@ -1677,7 +1677,7 @@ archive file and the source category is deleted."
 	(mapc (lambda (m) (set-marker m nil))
 	      (list cbeg tbeg dbeg tend cend))))
     (when (> archived-count 0)
-      (with-current-buffer (get-buffer (find-file-noselect tarchive))
+      (with-current-buffer (find-file-noselect tarchive)
 	(widen)
 	(goto-char (point-min))
 	(let* ((inhibit-read-only t)
@@ -1697,7 +1697,7 @@ archive file and the source category is deleted."
 			(forward-line)
 			(buffer-substring-no-properties (point) cend))))
 	  ;; Merge into goal archive category, if it exists, else create it.
-	  (with-current-buffer (get-buffer (find-file-noselect garchive))
+	  (with-current-buffer (find-file-noselect garchive)
 	    (let ((gbeg (when (re-search-forward
 			       (concat "^" (regexp-quote
 					    (concat todo-category-beg goal))
@@ -5702,6 +5702,11 @@ of each other."
 Passed by `todo-insert-item' to `todo-insert-item--next-param' to
 dynamically create item insertion commands.")
 
+;; As the following function uses this variable, define it here without
+;; a value to avoid a byte-compiler warning.  The real definition with
+;; value is provided below with the other todo-mode key bindings.
+(defvar todo-mode-map)
+
 (defun todo-insert-item--next-param (args params last keys-so-far)
   "Generate and invoke an item insertion command.
 Dynamically generate the command, its arguments ARGS and its key
@@ -5794,7 +5799,24 @@ keys already entered and those still available."
               (apply #'todo-insert-item--basic (nconc arg parlist)))))
          ;; Operate on a copy of the parameter list so the original is
          ;; not consumed, thus available for the next key typed.
-         (params0 params))
+         (params0 params)
+         (tm-keys (let (l)
+                    (map-keymap (lambda (key _binding)
+                                  (push key l))
+                                todo-mode-map)
+                    l)))
+    ;; Initially assign each key in todo-mode-map a function identifying
+    ;; it as invalid for item insertion, thus preventing mistakenly
+    ;; pressing a key from executing an unwanted different todo-mode
+    ;; command (bug#70937); the actual item insertion keys are redefined
+    ;; when looping over the item insertion parameters.
+    (dolist (k tm-keys)
+      (when (characterp k)
+        (define-key map (string k)
+          (lambda ()
+            (interactive)
+            (message (concat "`%s' is not a valid remaining item insertion key")
+                     (string k))))))
     (when last
       (if (memq last '(default copy))
 	  (progn

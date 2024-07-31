@@ -124,6 +124,7 @@ Argument LANGUAGE is either `typescript' or `tsx'."
      ((parent-is "object_type") parent-bol typescript-ts-mode-indent-offset)
      ((parent-is "enum_body") parent-bol typescript-ts-mode-indent-offset)
      ((parent-is "class_body") parent-bol typescript-ts-mode-indent-offset)
+     ((parent-is "interface_body") parent-bol typescript-ts-mode-indent-offset)
      ((parent-is "arrow_function") parent-bol typescript-ts-mode-indent-offset)
      ((parent-is "parenthesized_expression") parent-bol typescript-ts-mode-indent-offset)
      ((parent-is "binary_expression") parent-bol typescript-ts-mode-indent-offset)
@@ -505,6 +506,8 @@ This mode is intended to be inherited by concrete major modes."
 
     (treesit-major-mode-setup)))
 
+(derived-mode-add-parents 'typescript-ts-mode '(typescript-mode))
+
 (if (treesit-ready-p 'typescript)
     (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode)))
 
@@ -561,6 +564,8 @@ at least 3 (which is the default value)."
     (setq-local syntax-propertize-function #'tsx-ts--syntax-propertize)
 
     (treesit-major-mode-setup)))
+
+(derived-mode-add-parents 'tsx-ts-mode '(tsx-mode))
 
 (defvar typescript-ts--s-p-query
   (when (treesit-available-p)

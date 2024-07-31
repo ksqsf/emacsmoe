@@ -100,6 +100,18 @@ one's optionally accessible from the keyboard, just like any other
 side window.  Hit '<RET>' over a nick to spawn a "/QUERY" or a
 "Lastlog" (Occur) session.  See 'erc-nickbar-mode' for more.
 
+** New module to keep tabs on query pals who aren't in your channels.
+ERC has gotten a bit pickier about managing participants in query
+buffers.  "Untracked" correspondents no longer appear automatically in
+membership tables, even if you respond or initiate contact.  Instead,
+ERC only adds and removes participant data when these same users join
+and leave channels.  Anyone uncomfortable with the apparent
+uncertainty this brings can look to the new 'querypoll' module, which
+periodically sends WHO requests to keep track of correspondents.
+Those familiar with the IRCv3 Monitor extension can think of this as
+"fallback code" and a temporary placeholder for the real thing.
+Add 'querypoll' (and 'nickbar') to 'erc-modules' to try it out.
+
 ** Option 'erc-timestamp-use-align-to' more versatile.
 While this option has always offered to right-align stamps via the
 'display' text property, it's now more effective at doing so when set
@@ -334,6 +346,18 @@ has changed in some way.  At present, ERC does not perform this step
 automatically on your behalf, even if a change was made in a
 'Custom-mode' buffer or via 'setopt'.
 
+** New broadcast-oriented slash commands /AME, /GME, and /GMSG.
+Also available as the library functions 'erc-cmd-AME', 'erc-cmd-GME',
+and 'erc-cmd-GMSG', these new slash commands can prove handy in test
+environments.
+
+** New face 'erc-information' for local administrative messages.
+Messages not originating from a server have historically been shown in
+'erc-notice-face', sometimes in combination with 'erc-error-face'.
+Neither are well suited for local messages of moderate importance.
+From now on, such messages will appear in a more muted color but
+retain the familiar 'erc-notice-prefix' stars.
+
 ** Miscellaneous UX changes.
 Some minor quality-of-life niceties have finally made their way to
 ERC.  For example, fool visibility has become togglable with the new
@@ -481,16 +505,14 @@ these areas without inflicting collateral damage.
 Despite the rationale, this move admittedly ushers in a heightened
 potential for disruption because third-party members of ERC's
 modification hooks may not take kindly to encountering stamp-only
-messages.  They may also expect members of 'erc-insert-pre-hook' and
-'erc-insert-done-hook' to run unconditionally, even though ERC
-suppresses those hooks when inserting date stamps.  Third parties may
-also not appreciate that 'erc-timestamp-last-inserted-left' no longer
-records the final trailing newline in 'erc-timestamp-format-left'.  If
-these inconveniences prove too encumbering to deal with right away,
-see the escape hatch 'erc-stamp-prepend-date-stamps-p', which should
-help ease the transition.  As for detecting these new stamp-only
-messages from members of 'erc-insert-modify-hook' and friends, see the
-function 'erc-stamp-inserting-date-stamp-p'.
+messages or the new behavior of 'erc-timestamp-last-inserted-left',
+which no longer records the final trailing newline in the variable
+'erc-timestamp-format-left'.  If these inconveniences prove too
+encumbering to deal with right away, see the escape hatch
+'erc-stamp-prepend-date-stamps-p', which should help ease the
+transition.  As for detecting these new stamp-only messages from
+members of 'erc-insert-modify-hook' and friends, see the function
+'erc-stamp-inserting-date-stamp-p'.
 
 *** The role of a module's Custom group is now more clearly defined.
 Associating built-in modules with Custom groups and "provided" library
@@ -552,6 +574,22 @@ things sane, 'erc-channel-users' (plural) is now officially being
 redubbed 'erc-channel-members'.  Similarly, the utility function
 'erc-get-channel-user' has been renamed to 'erc-get-channel-member'.
 Expect deprecations of the old names to follow in a future release.
+
+*** Query participant tables now depend on channel membership.
+ERC has always been inconsistent and difficult to predict in its
+handling of records describing other IRC users.  This has made simple
+things like detecting the online status of query peers and the
+presence of one's own user in 'erc-server-users' especially
+unreliable.  From now on, ERC resolves to be more sensible and
+conservative in such areas.  For example, it now retains its own user
+info, once discovered, for the remainder of a session.  It also relies
+solely on channel membership to "drive" query participant information.
+That is, when another IRC user departs their last known channel, any
+queries with them will consider them absent, even if they're likely
+still online.  Anyone with difficulty adapting to this new paradigm
+should contact the mailing list to inquire about associated
+compatibility flags, which can be made public on request.  Also see
+the related news item announcing the module 'querypoll'.
 
 *** The 'erc-channel-user' struct has a changed internally.
 The five boolean slots for membership prefixes have been folded
@@ -645,6 +683,14 @@ release lacks a similar solution for detecting "joinedness" directly,
 but users can turn to 'xor'-ing 'erc-default-target' and 'erc-target'
 as a makeshift kludge.
 
+*** Function 'erc-kill-channel' renamed to 'erc-part-channel-on-kill'.
+This function, which normally emits a 'PART' when ERC kills a channel
+buffer, has been renamed for clarity.  Moreover, this and all other
+members of 'erc-kill-channel-hook' can now take comfort in knowing
+that the killing of buffers done on behalf of the option
+'erc-kill-buffer-on-part' has been made more detectable by the flag
+'erc-killing-buffer-on-part-p'.
+
 *** Channel-mode handling has become stricter and more predictable.
 ERC has always processed channel modes using "standardized" letters
 and popular status prefixes.  Starting with this release, ERC will
@@ -666,6 +712,14 @@ The option 'erc-format-nick-function' has been renamed to
 'erc-speaker-from-channel-member-function' to better reflect its
 actual role.  So too has the related function 'erc-format-nick', which
 is now 'erc-determine-speaker-from user'.
+
+*** All default response handlers return nil.
+Actually, this isn't yet true, but ERC is moving in this direction.
+The goal is to guarantee that trailing members of response hooks, like
+'erc-server-005-functions', have an opportunity to run after the
+default handler.  For now, certain default handlers that may have
+previously returned non-nil, like 'erc-server-PONG' and
+'erc-server-904', have been updated to return nil in all cases.
 
 *** A template-based approach to formatting inserted chat messages.
 Predicting and influencing how ERC formats messages containing a
@@ -694,8 +748,6 @@ by toggling a provided compatibility switch.  See source code around
 the function 'erc-send-action' for details.
 
 *** Miscellaneous changes
-Two helper macros from GNU ELPA's Compat library are now available to
-third-party modules as 'erc-compat-call' and 'erc-compat-function'.
 In 'erc-button-alist', 'Info-goto-node' has been supplanted by plain
 old 'info', and the "<URL:...>" entry has been removed because it was
 more or less redundant.  In all ERC buffers, the "<TAB>" key is now
@@ -1377,7 +1429,7 @@ reconnection attempts that ERC will make per server.
 in seconds, that ERC will wait between successive reconnect attempts.
 
 *** erc-server-send-ping-timeout: Determines when to consider a connection
-stalled and restart it.  The default is	after 120 seconds.
+stalled and restart it.  The default is after 120 seconds.
 
 *** erc-system-name: Determines the system name to use when logging in.
 The default is to figure this out by calling `system-name'.
@@ -2338,7 +2390,7 @@ in XEmacs.
   Please use M-x customize-variable RET erc-modules RET to change the
   default if it does not suite your needs.
 
-** THe symbol used in `erc-nickserv-passwords' for debian.org IRC servers
+** The symbol used in `erc-nickserv-passwords' for debian.org IRC servers
   (formerly called OpenProjects, now FreeNode) has changed from
   openprojects to freenode.  You may need to update your configuration
   for a successful automatic nickserv identification.

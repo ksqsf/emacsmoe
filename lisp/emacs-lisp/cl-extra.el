@@ -711,11 +711,6 @@ PROPLIST is a list of the sort returned by `symbol-plist'.
 (eval-when-compile (require 'cl-macs))  ;Explicitly, for cl--find-class.
 (require 'help-mode)
 
-;; FIXME: We could go crazy and add another entry so describe-symbol can be
-;; used with the slot names of CL structs (and/or EIEIO objects).
-(add-to-list 'describe-symbol-backends
-             `(nil ,#'cl-find-class ,(lambda (s _b _f) (cl-describe-type s))))
-
 (defconst cl--typedef-regexp
   (concat "(" (regexp-opt '("defclass" "defstruct" "cl-defstruct"
                             "cl-deftype" "deftype"))
@@ -724,11 +719,6 @@ PROPLIST is a list of the sort returned by `symbol-plist'.
   (defvar find-function-regexp-alist)
   (add-to-list 'find-function-regexp-alist
                '(define-type . cl--typedef-regexp)))
-
-(define-button-type 'cl-help-type
-  :supertype 'help-function-def
-  'help-function #'cl-describe-type
-  'help-echo (purecopy "mouse-2, RET: describe this type"))
 
 (define-button-type 'cl-type-definition
   :supertype 'help-function-def
@@ -744,7 +734,7 @@ Call `cl--find-class' to get TYPE's propname `cl--class'"
   (cl--find-class type))
 
 ;;;###autoload
-(defun cl-describe-type (type)
+(defun cl-describe-type (type &optional _buf _frame)
   "Display the documentation for type TYPE (a symbol)."
   (interactive
    (let ((str (completing-read "Describe type: " obarray #'cl-find-class t)))
@@ -766,6 +756,15 @@ Call `cl--find-class' to get TYPE's propname `cl--class'"
         ;; Return the text we displayed.
         (buffer-string)))))
 
+(defun cl--class-children (class)
+  (let ((children '()))
+    (mapatoms
+     (lambda (sym)
+       (let ((sym-class (cl--find-class sym)))
+         (and sym-class (memq class (cl--class-parents sym-class))
+          (push sym children)))))
+    children))
+
 (defun cl--describe-class (type &optional class)
   (unless class (setq class (cl--find-class type)))
   (let ((location (find-lisp-object-file-name type 'define-type))
@@ -773,7 +772,7 @@ Call `cl--find-class' to get TYPE's propname `cl--class'"
     (insert (symbol-name type)
             (substitute-command-keys " is a type (of kind `"))
     (help-insert-xref-button (symbol-name metatype)
-                             'cl-help-type metatype)
+                             'help-type metatype)
     (insert (substitute-command-keys "')"))
     (when location
       (insert (substitute-command-keys " in `"))
@@ -792,31 +791,35 @@ Call `cl--find-class' to get TYPE's propname `cl--class'"
           (setq cur (cl--class-name cur))
           (insert (substitute-quotes "`"))
           (help-insert-xref-button (symbol-name cur)
-                                   'cl-help-type cur)
+                                   'help-type cur)
           (insert (substitute-command-keys (if pl "', " "'"))))
         (insert ".\n")))
 
-    ;; Children, if available.  ¡For EIEIO!
-    (let ((ch (condition-case nil
-                  (cl-struct-slot-value metatype 'children class)
-                (cl-struct-unknown-slot nil)))
+    ;; Children.
+    (let ((ch (cl--class-children class))
           cur)
       (when ch
         (insert " Children ")
         (while (setq cur (pop ch))
           (insert (substitute-quotes "`"))
           (help-insert-xref-button (symbol-name cur)
-                                   'cl-help-type cur)
+                                   'help-type cur)
           (insert (substitute-command-keys (if ch "', " "'"))))
         (insert ".\n")))
+
+    ;; Describe all the slots in this class.
+    ;; Put it before the docstring, since the docstring may want
+    ;; to refer to the slots.
+    (cl--describe-class-slots class)
 
     ;; Type's documentation.
     (let ((doc (cl--class-docstring class)))
       (when doc
-        (insert "\n" doc "\n\n")))
-
-    ;; Describe all the slots in this class.
-    (cl--describe-class-slots class)
+        (insert (if (save-excursion
+                      (or (< (skip-chars-backward "\n") -1) (bobp)))
+                    ""
+                  "\n")
+                doc "\n\n")))
 
     ;; Describe all the methods specific to this class.
     (let ((generics (cl-generic-all-functions type)))
@@ -903,22 +906,32 @@ Outputs to the current buffer."
          (cslots (condition-case nil
                      (cl-struct-slot-value metatype 'class-slots class)
                    (cl-struct-unknown-slot nil))))
-    (insert (propertize "Instance Allocated Slots:\n\n"
-			'face 'bold))
-    (let* ((has-doc nil)
-           (slots-strings
-            (mapcar
-             (lambda (slot)
-               (list (cl-prin1-to-string (cl--slot-descriptor-name slot))
-                     (cl-prin1-to-string (cl--slot-descriptor-type slot))
-                     (cl-prin1-to-string (cl--slot-descriptor-initform slot))
-                     (let ((doc (alist-get :documentation
-                                           (cl--slot-descriptor-props slot))))
-                       (if (not doc) ""
-                         (setq has-doc t)
-                         (substitute-command-keys doc)))))
-             slots)))
-      (cl--print-table `("Name" "Type" "Default") slots-strings has-doc))
+    (if (and (null slots) (eq metatype 'built-in-class))
+        (insert "This is a built-in type.\n")
+
+      (insert (propertize "Instance Allocated Slots:\n\n"
+			  'face 'bold))
+      (let* ((has-doc nil)
+             (slots-strings
+              (mapcar
+               (lambda (slot)
+                 (list (cl-prin1-to-string (cl--slot-descriptor-name slot))
+                       (let ((type (cl--slot-descriptor-type slot)))
+                         (cond
+                          ((eq type t) "")
+                          ((and type (symbolp type) (cl--find-class type))
+                           (make-text-button (symbol-name type) nil
+		                             'type 'help-type
+		                             'help-args (list type)))
+                          (t (cl-prin1-to-string type))))
+                       (cl-prin1-to-string (cl--slot-descriptor-initform slot))
+                       (let ((doc (alist-get :documentation
+                                             (cl--slot-descriptor-props slot))))
+                         (if (not doc) ""
+                           (setq has-doc t)
+                           (substitute-command-keys doc)))))
+               slots)))
+        (cl--print-table `("Name" "Type" "Default") slots-strings has-doc)))
     (insert "\n")
     (when (> (length cslots) 0)
       (insert (propertize "\nClass Allocated Slots:\n\n" 'face 'bold))

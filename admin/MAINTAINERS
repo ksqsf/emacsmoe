@@ -9,6 +9,7 @@ The (co-)maintainers of Emacs are:
 
 	Eli Zaretskii <eliz@gnu.org>
 	Stefan Kangas <stefankangas@gmail.com>
+	Andrea Corallo <acorallo@gnu.org>
 
 ==============================================================================
 1. Areas that someone wants to be maintaining (i.e. has a particularly
@@ -360,6 +361,9 @@ Po Lu
 	X11 and GTK xwidget support in src/xwidget.c
 	Precision pixel scrolling in lisp/pixel-scroll.el
 
+Daniel Pettersson
+	lisp/jsonrpc.el
+
 ==============================================================================
 3. Externally maintained packages.
 ==============================================================================
@@ -378,9 +382,7 @@ Tramp
 
 Modus themes
         Maintainer: Protesilaos Stavrou
-        Repository:  https://git.sr.ht/~protesilaos
-        Mailing list: https://lists.sr.ht/~protesilaos/modus-themes
-        Bug Reports: M-x modus-themes-report-bug
+        Repository:  https://github.com/protesilaos/modus-themes
 
         doc/misc/modus-themes.org
         etc/themes/modus*.el

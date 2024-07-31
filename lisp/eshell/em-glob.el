@@ -190,6 +190,12 @@ interpretation."
   '(("**/" . recurse)
     ("***/" . recurse-symlink)))
 
+(defsubst eshell-glob-chars-regexp ()
+  "Return the lazily-created value for `eshell-glob-chars-regexp'."
+  (or eshell-glob-chars-regexp
+      (setq-local eshell-glob-chars-regexp
+		  (format "[%s]+" (apply 'string eshell-glob-chars-list)))))
+
 (defun eshell-glob-regexp (pattern)
   "Convert glob-pattern PATTERN to a regular expression.
 The basic syntax is:
@@ -210,11 +216,8 @@ set to true, then these characters will match themselves in the
 resulting regular expression."
   (let ((matched-in-pattern 0)          ; How much of PATTERN handled
 	regexp)
-    (while (string-match
-	    (or eshell-glob-chars-regexp
-                (setq-local eshell-glob-chars-regexp
-		     (format "[%s]+" (apply 'string eshell-glob-chars-list))))
-	    pattern matched-in-pattern)
+    (while (string-match (eshell-glob-chars-regexp)
+                         pattern matched-in-pattern)
       (let* ((op-begin (match-beginning 0))
 	     (op-char (aref pattern op-begin)))
 	(setq regexp
@@ -238,6 +241,10 @@ resulting regular expression."
 	    regexp
 	    (regexp-quote (substring pattern matched-in-pattern))
 	    "\\'")))
+
+(defun eshell-glob-p (pattern)
+  "Return non-nil if PATTERN has any special glob characters."
+  (string-match (eshell-glob-chars-regexp) pattern))
 
 (defun eshell-glob-convert-1 (glob &optional last)
   "Convert a GLOB matching a single element of a file name to regexps.
@@ -291,14 +298,13 @@ The result is a list of three elements:
      symlinks.
 
 3. A boolean indicating whether to match directories only."
-  (let ((globs (eshell-split-path glob))
-        (isdir (eq (aref glob (1- (length glob))) ?/))
+  (let ((globs (eshell-split-filename glob))
+        (isdir (string-suffix-p "/" glob))
         start-dir result last-saw-recursion)
     (if (and (cdr globs)
              (file-name-absolute-p (car globs)))
-        (setq start-dir (car globs)
-              globs (cdr globs))
-      (setq start-dir "."))
+        (setq start-dir (pop globs))
+      (setq start-dir (file-name-as-directory ".")))
     (while globs
       (if-let ((recurse (cdr (assoc (car globs)
                                     eshell-glob-recursive-alist))))
@@ -306,11 +312,15 @@ The result is a list of three elements:
               (setcar result recurse)
             (push recurse result)
             (setq last-saw-recursion t))
-        (push (eshell-glob-convert-1 (car globs) (null (cdr globs)))
-              result)
+        (if (or result (eshell-glob-p (car globs)))
+            (push (eshell-glob-convert-1 (car globs) (null (cdr globs)))
+                  result)
+          ;; We haven't seen a glob yet, so instead append to the start
+          ;; directory.
+          (setq start-dir (concat start-dir (car globs))))
         (setq last-saw-recursion nil))
       (setq globs (cdr globs)))
-    (list (file-name-as-directory start-dir)
+    (list start-dir
           (nreverse result)
           isdir)))
 
@@ -331,16 +341,24 @@ Mainly they are not supported because file matching is done with Emacs
 regular expressions, and these cannot support the above constructs."
   (let ((globs (eshell-glob-convert glob))
         eshell-glob-matches message-shown)
-    (unwind-protect
-        (apply #'eshell-glob-entries globs)
-      (if message-shown
-	  (message nil)))
-    (or (and eshell-glob-matches (sort eshell-glob-matches #'string<))
-	(if eshell-error-if-no-glob
-	    (error "No matches found: %s" glob)
-          (if eshell-glob-splice-results
-              (list glob)
-            glob)))))
+    (if (null (cadr globs))
+        ;; If, after examining GLOB, there are no actual globs, just
+        ;; bail out.  This can happen for remote file names using "~",
+        ;; like "/ssh:remote:~/file.txt".  During parsing, we can't
+        ;; always be sure if the "~" is a home directory reference or
+        ;; part of a glob (e.g. if the argument was assembled from
+        ;; variables).
+        glob
+      (unwind-protect
+          (apply #'eshell-glob-entries globs)
+        (if message-shown
+            (message nil)))
+      (or (and eshell-glob-matches (sort eshell-glob-matches #'string<))
+          (if eshell-error-if-no-glob
+              (error "No matches found: %s" glob)
+            (if eshell-glob-splice-results
+                (list glob)
+              glob))))))
 
 ;; FIXME does this really need to abuse eshell-glob-matches, message-shown?
 (defun eshell-glob-entries (path globs only-dirs)

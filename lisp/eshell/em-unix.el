@@ -789,7 +789,7 @@ available..."
 		    (ignore-errors
 		      (occur (car args))))
 		  (if (get-buffer "*Occur*")
-		      (with-current-buffer (get-buffer "*Occur*")
+		      (with-current-buffer "*Occur*"
 			(setq string (buffer-string))
 			(kill-buffer (current-buffer)))))
 		(if string (insert string))
@@ -815,8 +815,8 @@ external command."
   (if (and maybe-use-occur eshell-no-grep-available)
       (eshell-poor-mans-grep args)
     (eshell-compile command (cons "-n" args)
-                    (and eshell-plain-grep-behavior
-                         'interactive)
+                    (when eshell-plain-grep-behavior
+                      'plain)
                      #'grep-mode)))
 
 (defun eshell/grep (&rest args)

@@ -518,6 +518,10 @@ or your nickname is mentioned
 @item page
 Process CTCP PAGE requests from IRC
 
+@cindex modules, querypoll
+@item querypoll
+Update query participant data by continually polling the server
+
 @cindex modules, readonly
 @item readonly
 Make displayed lines read-only
@@ -1230,25 +1234,30 @@ machine Example.Net login aph-bot password sesame
 
 (defun my-erc-up (network)
   (interactive "Snetwork: ")
-
-  (pcase network
-    ('libera
-     (let ((erc-sasl-mechanism 'external))
-       (erc-tls :server "irc.libera.chat" :port 6697
-                :client-certificate t)))
-    ('example
-     (let ((erc-sasl-auth-source-function
-            #'erc-sasl-auth-source-password-as-host))
-       (erc-tls :server "irc.example.net" :port 6697
-                :user "alyssa"
-                :password "Example.Net")))))
+  (require 'erc-sasl)
+  (or (let ((erc-modules (cons 'sasl erc-modules)))
+        (pcase network
+          ('libera
+           (let ((erc-sasl-mechanism 'external))
+             (erc-tls :server "irc.libera.chat"
+                      :client-certificate t)))
+          ('example
+           (let ((erc-sasl-auth-source-function
+                  #'erc-sasl-auth-source-password-as-host))
+             (erc-tls :server "irc.example.net"
+                      :user "alyssa"
+                      :password "Example.Net")))))
+      ;; Non-SASL
+      (call-interactively #'erc-tls)))
 @end lisp
 
 You've started storing your credentials with auth-source and have
 decided to try SASL on another network as well.  But there's a catch:
 this network doesn't support @samp{EXTERNAL}.  You use
-@code{let}-binding to get around this and successfully authenticate to
-both networks.
+@code{let}-binding to work around this and successfully authenticate
+to both networks.  (Note that this example assumes you've removed
+@code{sasl} from @code{erc-modules} globally and have instead opted to
+add it locally when connecting to preconfigured networks.)
 
 @end itemize
 
@@ -2118,11 +2127,20 @@ to IRC, and don't forget that you can roll back to the previous
 version by running @kbd{M-x package-delete @key{RET}}.
 @xref{Packages,,,emacs, The Emacs Editor}, for more information.
 
+Note that a bug affecting Emacs' packaging machinery may prevent the
+above method from working on Emacs versions 29 and below.  Users on 29
+can try running @kbd{C-u M-x package-install @key{RET}} instead.
+Users on 28 and below can click on the @emph{installed} @samp{erc}
+line item in the @file{*Packages*} buffer instead of the newest one,
+and then, in the resulting @code{help-mode} buffer, find and activate
+the button for the newest version, which should appear in the summary
+item @samp{Other versions}.
+
 In the rare instance you need an emergency fix or have volunteered to
 test an edge feature between ERC releases, you can try adding
 @samp{("devel" . "https://elpa.gnu.org/devel/")} to
 @code{package-archives} prior to performing the steps above.  For
-this, you'll want to instead select a ``snapshot'' version from the
+this, you'll want to instead select a @dfn{snapshot} version from the
 menu.  Please be aware that when going this route, the latest changes
 may not yet be available and you run the risk of incurring other bugs
 and encountering unstable features.

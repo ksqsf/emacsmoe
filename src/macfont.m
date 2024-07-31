@@ -3004,6 +3004,21 @@ macfont_draw (struct glyph_string *s, int from, int to, int x, int y,
     {
       CGAffineTransform atfm;
 
+      if (face->shadow_p)
+        {
+          CGSize offset;
+          CGColorRef shadow_color;
+
+          offset = CGSizeMake (face->shadow_offset.x, - face->shadow_offset.y);
+          if (face->shadow_color_defaulted_p)
+            shadow_color = get_cgcolor (NS_FACE_FOREGROUND (face));
+          else
+            shadow_color = get_cgcolor (face->shadow_color);
+          CGContextSetShadowWithColor (context, offset, face->shadow_blur,
+                                       shadow_color);
+          CGColorRelease (shadow_color);
+        }
+
       CGContextScaleCTM (context, 1, -1);
       if (s->hl == DRAW_CURSOR)
         {
@@ -3034,13 +3049,13 @@ macfont_draw (struct glyph_string *s, int from, int to, int x, int y,
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 1070
           if ([[FRAME_NS_VIEW(f) window] respondsToSelector:
                                            @selector(backingScaleFactor)])
-#endif
+#endif  // MAC_OS_X_VERSION_MIN_REQUIRED < 1070
             CGContextSetLineWidth (context, synthetic_bold_factor * font_size
                                    * [[FRAME_NS_VIEW(f) window] backingScaleFactor]);
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 1070
           else
-#endif
-#endif
+#endif  // MAC_OS_X_VERSION_MIN_REQUIRED < 1070
+#endif  // MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 1070
             CGContextSetLineWidth (context, synthetic_bold_factor * font_size);
 #endif
@@ -3074,8 +3089,24 @@ macfont_draw (struct glyph_string *s, int from, int to, int x, int y,
       else
 #endif	/* MAC_OS_X_VERSION_MAX_ALLOWED >= 1070 */
         {
+          CGSize offset;
+          offset = CGSizeMake (0, 0);
+
           CGContextSetFont (context, macfont_info->cgfont);
           CGContextSetFontSize (context, font_size);
+
+          /*
+             Put shadows under text.
+
+             A 'shadow' style is described by:
+             - blur (default = 5?)
+             - offset (default = (0, 0))
+             - color (default = foreground)
+
+             TODO: make it a text property
+          */
+          CGContextSetShadow (context, offset, 5.0);
+
           CGContextShowGlyphsAtPositions (context, glyphs, positions, len);
         }
     }

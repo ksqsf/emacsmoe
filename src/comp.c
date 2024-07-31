@@ -469,7 +469,7 @@ load_gccjit_if_necessary (bool mandatory)
 
 
 /* Increase this number to force a new Vcomp_abi_hash to be generated.  */
-#define ABI_VERSION "5"
+#define ABI_VERSION "6"
 
 /* Length of the hashes used for eln file naming.  */
 #define HASH_LENGTH 8
@@ -502,11 +502,9 @@ load_gccjit_if_necessary (bool mandatory)
 #define THIRD(x)				\
   XCAR (XCDR (XCDR (x)))
 
-#if 0	/* unused for now */
 /* Like call0 but stringify and intern.  */
 #define CALL0I(fun)				\
   CALLN (Ffuncall, intern_c_string (STR (fun)))
-#endif
 
 /* Like call1 but stringify and intern.  */
 #define CALL1I(fun, arg)				\
@@ -635,6 +633,7 @@ typedef struct {
   gcc_jit_function *func; /* Current function being compiled.  */
   bool func_has_non_local; /* From comp-func has-non-local slot.  */
   EMACS_INT func_speed; /* From comp-func speed slot.  */
+  EMACS_INT func_safety; /* From comp-func safety slot.  */
   gcc_jit_block *block;  /* Current basic block being compiled.  */
   gcc_jit_lvalue *scratch; /* Used as scratch slot for some code sequence (switch).  */
   ptrdiff_t frame_size; /* Size of the following array in elements. */
@@ -702,6 +701,8 @@ static void helper_save_restriction (void);
 static bool helper_PSEUDOVECTOR_TYPEP_XUNTAG (Lisp_Object, enum pvec_type);
 static struct Lisp_Symbol_With_Pos *
 helper_GET_SYMBOL_WITH_POSITION (Lisp_Object);
+static Lisp_Object
+helper_sanitizer_assert (Lisp_Object, Lisp_Object);
 
 /* Note: helper_link_table must match the list created by
    `declare_runtime_imported_funcs'.  */
@@ -714,6 +715,7 @@ static void *helper_link_table[] =
     helper_unbind_n,
     helper_save_restriction,
     helper_GET_SYMBOL_WITH_POSITION,
+    helper_sanitizer_assert,
     record_unwind_current_buffer,
     set_internal,
     helper_unwind_protect,
@@ -743,7 +745,7 @@ static Lisp_Object
 comp_hash_string (Lisp_Object string)
 {
   Lisp_Object digest = make_uninit_string (MD5_DIGEST_SIZE * 2);
-  md5_buffer (SSDATA (string), SCHARS (string), SSDATA (digest));
+  md5_buffer (SSDATA (string), SBYTES (string), SSDATA (digest));
   hexbuf_digest (SSDATA (digest), SDATA (digest), MD5_DIGEST_SIZE);
 
   return Fsubstring (digest, Qnil, make_fixnum (HASH_LENGTH));
@@ -2442,7 +2444,7 @@ emit_limple_insn (Lisp_Object insn)
     {
       Lisp_Object arg1 = arg[1];
 
-      if (EQ (Ftype_of (arg1), Qcomp_mvar))
+      if (EQ (Fcl_type_of (arg1), Qcomp_mvar))
 	res = emit_mvar_rval (arg1);
       else if (EQ (FIRST (arg1), Qcall))
 	res = emit_limple_call (XCDR (arg1));
@@ -2585,7 +2587,8 @@ emit_call_with_type_hint (gcc_jit_function *func, Lisp_Object insn,
 			  Lisp_Object type)
 {
   bool hint_match =
-    !NILP (CALL2I (comp-mvar-type-hint-match-p, SECOND (insn), type));
+    !comp.func_safety
+    && !NILP (CALL2I (comp-mvar-type-hint-match-p, SECOND (insn), type));
   gcc_jit_rvalue *args[] =
     { emit_mvar_rval (SECOND (insn)),
       gcc_jit_context_new_rvalue_from_int (comp.ctxt,
@@ -2601,7 +2604,8 @@ emit_call2_with_type_hint (gcc_jit_function *func, Lisp_Object insn,
 			   Lisp_Object type)
 {
   bool hint_match =
-    !NILP (CALL2I (comp-mvar-type-hint-match-p, SECOND (insn), type));
+    !comp.func_safety
+    && !NILP (CALL2I (comp-mvar-type-hint-match-p, SECOND (insn), type));
   gcc_jit_rvalue *args[] =
     { emit_mvar_rval (SECOND (insn)),
       emit_mvar_rval (THIRD (insn)),
@@ -2974,6 +2978,10 @@ declare_runtime_imported_funcs (void)
   args[0] = comp.lisp_obj_type;
   ADD_IMPORTED (helper_GET_SYMBOL_WITH_POSITION, comp.lisp_symbol_with_position_ptr_type,
 		1, args);
+
+  args[0] = comp.lisp_obj_type;
+  args[1] = comp.lisp_obj_type;
+  ADD_IMPORTED (helper_sanitizer_assert, comp.lisp_obj_type, 2, args);
 
   ADD_IMPORTED (record_unwind_current_buffer, comp.void_type, 0, NULL);
 
@@ -4277,6 +4285,7 @@ compile_function (Lisp_Object func)
 
   comp.func_has_non_local = !NILP (CALL1I (comp-func-has-non-local, func));
   comp.func_speed = XFIXNUM (CALL1I (comp-func-speed, func));
+  comp.func_safety = XFIXNUM (CALL1I (comp-func-safety, func));
 
   comp.func_relocs_local =
     gcc_jit_function_new_local (comp.func,
@@ -4619,6 +4628,8 @@ Return t on success.  */)
 			emit_simple_limple_call_void_ret);
       register_emitter (Qhelper_save_restriction,
 			emit_simple_limple_call_void_ret);
+      register_emitter (Qhelper_sanitizer_assert,
+			emit_simple_limple_call_lisp_ret);
       /* Inliners.  */
       register_emitter (Qadd1, emit_add1);
       register_emitter (Qsub1, emit_sub1);
@@ -5082,6 +5093,21 @@ helper_GET_SYMBOL_WITH_POSITION (Lisp_Object a)
   return XUNTAG (a, Lisp_Vectorlike, struct Lisp_Symbol_With_Pos);
 }
 
+static Lisp_Object
+helper_sanitizer_assert (Lisp_Object val, Lisp_Object type)
+{
+  if (!comp_sanitizer_active
+      || !NILP ((CALL2I (cl-typep, val, type))))
+    return Qnil;
+
+  AUTO_STRING (format, "Comp sanitizer FAIL for %s with type %s");
+  CALLN (Fmessage, format, val, type);
+  CALL0I (backtrace);
+  xsignal2 (Qcomp_sanitizer_error, val, type);
+
+  return Qnil;
+}
+
 
 /* `native-comp-eln-load-path' clean-up support code.  */
 
@@ -5177,7 +5203,7 @@ maybe_defer_native_compilation (Lisp_Object function_name,
   if (!native_comp_jit_compilation
       || noninteractive
       || !NILP (Vpurify_flag)
-      || !COMPILEDP (definition)
+      || !CLOSUREP (definition)
       || !STRINGP (Vload_true_file_name)
       || !suffix_p (Vload_true_file_name, ".elc")
       || !NILP (Fgethash (Vload_true_file_name, V_comp_no_native_file_h, Qnil)))
@@ -5276,7 +5302,7 @@ check_comp_unit_relocs (struct Lisp_Native_Comp_Unit *comp_u)
 	  if (NILP (Fgethash (x, comp_u->lambda_gc_guard_h, Qnil)))
 	    return false;
 	}
-      else if (!EQ (data_imp_relocs[i], AREF (comp_u->data_impure_vec, i)))
+      else if (!EQ (x, AREF (comp_u->data_impure_vec, i)))
 	return false;
     }
   return true;
@@ -5709,6 +5735,7 @@ natively-compiled one.  */);
   DEFSYM (Qhelper_unbind_n, "helper_unbind_n");
   DEFSYM (Qhelper_unwind_protect, "helper_unwind_protect");
   DEFSYM (Qhelper_save_restriction, "helper_save_restriction");
+  DEFSYM (Qhelper_sanitizer_assert, "helper_sanitizer_assert");
   /* Inliners.  */
   DEFSYM (Qadd1, "1+");
   DEFSYM (Qsub1, "1-");
@@ -5778,6 +5805,12 @@ natively-compiled one.  */);
   Fput (Qnative_lisp_file_inconsistent, Qerror_message,
         build_pure_c_string ("eln file inconsistent with current runtime "
 			     "configuration, please recompile"));
+
+  DEFSYM (Qcomp_sanitizer_error, "comp-sanitizer-error");
+  Fput (Qcomp_sanitizer_error, Qerror_conditions,
+	pure_list (Qcomp_sanitizer_error, Qerror));
+  Fput (Qcomp_sanitizer_error, Qerror_message,
+        build_pure_c_string ("Native code sanitizer runtime error"));
 
   DEFSYM (Qnative__compile_async, "native--compile-async");
 
@@ -5900,6 +5933,14 @@ compile calls to them.
 subr-name -> arity
 For internal use.  */);
   Vcomp_subr_arities_h = CALLN (Fmake_hash_table, QCtest, Qequal);
+
+  DEFVAR_BOOL ("comp-sanitizer-active", comp_sanitizer_active,
+    doc: /* If non-nil, enable runtime execution of native-compiler sanitizer.
+For this to be effective, Lisp code must be compiled
+with `comp-sanitizer-emit' non-nil.
+This is intended to be used only for development and
+verification of the native compiler.  */);
+  comp_sanitizer_active = false;
 
   Fprovide (intern_c_string ("native-compile"), Qnil);
 #endif /* #ifdef HAVE_NATIVE_COMP */

@@ -625,6 +625,48 @@ Do nothing if the variable `erc-command-indicator' is nil."
                                 erc--msg-props))))
       (erc--refresh-prompt))))
 
+;;;###autoload
+(defun erc-load-irc-script-lines (lines &optional force noexpand)
+  "Process a list of LINES as prompt input submissions.
+If optional NOEXPAND is non-nil, do not expand script-specific
+substitution sequences via `erc-process-script-line' and instead
+process LINES as literal prompt input.  With FORCE, bypass flood
+protection."
+  ;; The various erc-cmd-CMDs were designed to return non-nil when
+  ;; their command line should be echoed.  But at some point, these
+  ;; handlers began displaying their own output, which naturally
+  ;; appeared *above* the echoed command.  This tries to intercept
+  ;; these insertions, deferring them until the command has returned
+  ;; and its command line has been printed.
+  (cl-assert (eq 'erc-mode major-mode))
+  (let ((args (and erc-script-args
+                   (if (string-match "^ " erc-script-args)
+                       (substring erc-script-args 1)
+                     erc-script-args))))
+    (with-silent-modifications
+      (dolist (line lines)
+        (erc-log (concat "erc-load-script: CMD: " line))
+        (unless (string-match (rx bot (* (syntax whitespace)) eot) line)
+          (unless noexpand
+            (setq line (erc-process-script-line line args)))
+          (let ((erc--current-line-input-split (erc--make-input-split line))
+                calls insertp)
+            (add-function :around (local 'erc--send-message-nested-function)
+                          (lambda (&rest args) (push args calls))
+                          '((name . erc-script-lines-fn) (depth . -80)))
+            (add-function :around (local 'erc--send-action-function)
+                          (lambda (&rest args) (push args calls))
+                          '((name . erc-script-lines-fn) (depth . -80)))
+            (setq insertp
+                  (unwind-protect (erc-process-input-line line force)
+                    (remove-function (local 'erc--send-action-function)
+                                     'erc-script-lines-fn)
+                    (remove-function (local 'erc--send-message-nested-function)
+                                     'erc-script-lines-fn)))
+            (when (and insertp erc-script-echo)
+              (erc--command-indicator-display line)
+              (dolist (call calls)
+                (apply (car call) (cdr call))))))))))
 
 ;;; IRC control character processing.
 (defgroup erc-control-characters nil
@@ -661,13 +703,11 @@ The value `erc-interpret-controls-p' must also be t for this to work."
   :group 'erc-faces)
 
 (defface erc-inverse-face
-  '((t :foreground "White" :background "Black"))
+  '((t :inverse-video t))
   "ERC inverse face."
   :group 'erc-faces)
 
-(defface erc-spoiler-face
-  '((((background light)) :foreground "DimGray" :background "DimGray")
-    (((background dark)) :foreground "LightGray" :background "LightGray"))
+(defface erc-spoiler-face '((t :inherit default))
   "ERC spoiler face."
   :group 'erc-faces)
 
@@ -675,6 +715,8 @@ The value `erc-interpret-controls-p' must also be t for this to work."
   "ERC underline face."
   :group 'erc-faces)
 
+;; FIXME rename these to something like `erc-control-color-N-fg',
+;; and deprecate the old names via `define-obsolete-face-alias'.
 (defface fg:erc-color-face0 '((t :foreground "White"))
   "ERC face."
   :group 'erc-faces)
@@ -804,7 +846,7 @@ The value `erc-interpret-controls-p' must also be t for this to work."
       (intern (concat "bg:erc-color-face" (number-to-string n))))
      ((< 15 n 99)
       (list :background (aref erc--controls-additional-colors (- n 16))))
-     (t (erc-log (format "   Wrong color: %s" n)) '(default)))))
+     (t (erc-log (format "   Wrong color: %s" n)) nil))))
 
 (defun erc-get-fg-color-face (n)
   "Fetches the right face for foreground color N (0-15)."
@@ -820,7 +862,7 @@ The value `erc-interpret-controls-p' must also be t for this to work."
       (intern (concat "fg:erc-color-face" (number-to-string n))))
      ((< 15 n 99)
       (list :foreground (aref erc--controls-additional-colors (- n 16))))
-     (t (erc-log (format "   Wrong color: %s" n)) '(default)))))
+     (t (erc-log (format "   Wrong color: %s" n)) nil))))
 
 ;;;###autoload(autoload 'erc-irccontrols-mode "erc-goodies" nil t)
 (define-erc-module irccontrols nil
@@ -875,7 +917,7 @@ See `erc-interpret-controls-p' and `erc-interpret-mirc-color' for options."
                     (setq s (replace-match "" nil nil s 1))
                     (cond ((and erc-interpret-mirc-color (or fg-color bg-color))
                            (setq fg fg-color)
-                           (setq bg bg-color))
+                           (when bg-color (setq bg bg-color)))
                           ((string= control "\C-b")
                            (setq boldp (not boldp)))
                           ((string= control "\C-]")
@@ -936,7 +978,7 @@ Also see `erc-interpret-controls-p' and `erc-interpret-mirc-color'."
                (replace-match "" nil nil nil 1)
                (cond ((and erc-interpret-mirc-color (or fg-color bg-color))
                       (setq fg fg-color)
-                      (setq bg bg-color))
+                      (when bg-color (setq bg bg-color)))
                      ((string= control "\C-b")
                       (setq boldp (not boldp)))
                      ((string= control "\C-]")
@@ -968,13 +1010,16 @@ Also see `erc-interpret-controls-p' and `erc-interpret-mirc-color'."
   "Prepend properties from IRC control characters between FROM and TO.
 If optional argument STR is provided, apply to STR, otherwise prepend properties
 to a region in the current buffer."
-  (if (and fg bg (equal fg bg))
-      (progn
-        (setq fg 'erc-spoiler-face
-              bg nil)
-        (put-text-property from to 'mouse-face 'erc-inverse-face str))
-    (when fg (setq fg (erc-get-fg-color-face fg)))
-    (when bg (setq bg (erc-get-bg-color-face bg))))
+  (when (and fg bg (equal fg bg) (not (equal fg "99")))
+    (add-text-properties from to '( mouse-face erc-spoiler-face
+                                    cursor-face erc-spoiler-face)
+                         str)
+    (erc--reserve-important-text-props from to
+                                       '( mouse-face erc-spoiler-face
+                                          cursor-face erc-spoiler-face)
+                                       str))
+  (when fg (setq fg (erc-get-fg-color-face fg)))
+  (when bg (setq bg (erc-get-bg-color-face bg)))
   (font-lock-prepend-text-property
    from
    to
@@ -1068,6 +1113,196 @@ servers.  If called from a program, PROC specifies the server process."
          (if current-prefix-arg
              nil erc-server-process)))
   (multi-occur (erc-buffer-list nil proc) string))
+
+
+;;;; querypoll
+
+(declare-function ring-empty-p "ring" (ring))
+(declare-function ring-insert "ring" (ring item))
+(declare-function ring-insert+extend "ring" (ring item))
+(declare-function ring-length "ring" (ring))
+(declare-function ring-member "ring" (ring item))
+(declare-function ring-ref "ring" (ring index))
+(declare-function ring-remove "ring" (ring &optional index))
+
+(defvar-local erc--querypoll-ring nil)
+(defvar-local erc--querypoll-timer nil)
+
+(defcustom erc-querypoll-exclude-regexp
+  (rx bot (or (: "*" (+ nonl)) (: (+ (in "A-Za-z")) "Serv")) eot)
+  "Pattern to skip polling for bots and services you regularly query."
+  :group 'erc
+  :package-version '(ERC . "5.6")
+  :type 'regexp)
+
+;;;###autoload(autoload 'erc-querypoll-mode "erc-goodies" nil t)
+(define-erc-module querypoll nil
+  "Send periodic \"WHO\" requests for each query buffer.
+Omit query participants who are currently present in some channel.
+Instead of announcing arrivals and departures, rely on other modules,
+like `nickbar', to provide UI feedback when changes occur.
+
+Once ERC implements the `monitor' extension, this module will serve as
+an optional fallback for keeping query-participant rolls up to date on
+servers that lack support or are stingy with their allotments.  Until
+such time, this module should be considered experimental.
+
+This is a local ERC module, so selectively polling only a subset of
+query targets is possible but cumbersome.  To do so, ensure
+`erc-querypoll-mode' is enabled in the server buffer, and then toggle it
+as appropriate in desired query buffers.  To stop polling for the
+current connection, toggle off the command \\[erc-querypoll-mode] from a
+server buffer, or run \\`M-x C-u erc-querypoll-disable RET' from a
+target buffer."
+  ((if erc--target
+       (if (erc-query-buffer-p)
+           (progn ; accommodate those who eschew `erc-modules'
+             (erc-with-server-buffer
+               (unless erc-querypoll-mode
+                 (erc-querypoll-mode +1)))
+             (erc--querypoll-subscribe (current-buffer)))
+         (erc-querypoll-mode -1))
+     (cl-assert (not erc--decouple-query-and-channel-membership-p))
+     (setq-local erc--querypoll-ring (make-ring 5))
+     (erc-with-all-buffers-of-server erc-server-process nil
+       (unless erc-querypoll-mode
+         (erc-querypoll-mode +1)))))
+  ((when erc--querypoll-timer
+     (cancel-timer erc--querypoll-timer))
+   (if erc--target
+       (when-let (((erc-query-buffer-p))
+                  (ring (erc-with-server-buffer erc--querypoll-ring))
+                  (index (ring-member ring (current-buffer)))
+                  ((not (erc--querypoll-target-in-chan-p (current-buffer)))))
+         (ring-remove ring index)
+         (unless (erc-current-nick-p (erc-target))
+           (erc-remove-current-channel-member (erc-target))))
+     (erc-with-all-buffers-of-server erc-server-process #'erc-query-buffer-p
+       (erc-querypoll-mode -1)))
+   (kill-local-variable 'erc--querypoll-ring)
+   (kill-local-variable 'erc--querypoll-timer))
+  'local)
+
+(cl-defmethod erc--queries-current-p (&context (erc-querypoll-mode (eql t))) t)
+
+(defvar erc-querypoll-period-params '(10 10 1)
+  "Parameters affecting the delay with respect to the number of buffers.
+The elements represent some parameters of an exponential decay function,
+a(e)^{-x/b}+c.  The first number (a) affects the overall scaling.  A
+higher value means longer delays for all query buffers relative to queue
+length.  The second number (b) determines how quickly the delay
+decreases as the queue length increases.  Larger values make the delay
+taper off more gradually.  The last number (c) sets the minimum delay
+between updates regardless of queue length.")
+
+(defun erc--querypoll-compute-period (queue-size)
+  "Calculate delay based on QUEUE-SIZE."
+  (let ((scale (nth 0 erc-querypoll-period-params))
+        (rate (* 1.0 (nth 1 erc-querypoll-period-params)))
+        (min (nth 2 erc-querypoll-period-params)))
+    (+ (* scale (exp (/ (- queue-size) rate))) min)))
+
+(defun erc--querypoll-target-in-chan-p (buffer)
+  "Determine whether buffer's target, as a user, is joined to any channels."
+  (and-let*
+      ((target (erc--target-string (buffer-local-value 'erc--target buffer)))
+       (user (erc-get-server-user target))
+       (buffers (erc-server-user-buffers user))
+       ((seq-some #'erc-channel-p buffers)))))
+
+(defun erc--querypoll-get-length (ring)
+  "Return the effective length of RING, discounting chan members."
+  (let ((count 0))
+    (dotimes (i (ring-length ring))
+      (unless (erc--querypoll-target-in-chan-p (ring-ref ring i))
+        (cl-incf count 1)))
+    count))
+
+(defun erc--querypoll-get-next (ring)
+  (let ((n (ring-length ring)))
+    (catch 'found
+      (while (natnump (cl-decf n))
+        (when-let ((buffer (ring-remove ring))
+                   ((buffer-live-p buffer)))
+          ;; Push back buffers for users joined to some chan.
+          (if (erc--querypoll-target-in-chan-p buffer)
+              (ring-insert ring buffer)
+            (throw 'found buffer)))))))
+
+(defun erc--querypoll-subscribe (query-buffer &optional penalty)
+  "Add QUERY-BUFFER to FIFO and ensure timer is running."
+  (when query-buffer
+    (cl-assert (erc-query-buffer-p query-buffer)))
+  (erc-with-server-buffer
+    (when (and query-buffer
+               (not (with-current-buffer query-buffer
+                      (or (erc-current-nick-p (erc-target))
+                          (string-match erc-querypoll-exclude-regexp
+                                        (erc-target)))))
+               (not (ring-member erc--querypoll-ring query-buffer)))
+      (ring-insert+extend erc--querypoll-ring query-buffer))
+    (unless erc--querypoll-timer
+      (setq erc--querypoll-timer
+            (let* ((length (erc--querypoll-get-length erc--querypoll-ring))
+                   (period (erc--querypoll-compute-period length)))
+              (run-at-time (+ (or penalty 0) period)
+                           nil #'erc--querypoll-send (current-buffer)))))))
+
+(defun erc--querypoll-on-352 (target-nick args)
+  "Add or update `erc-server-users' data for TARGET-NICK from ARGS.
+Then add user to participant rolls in any existing query buffers."
+  (pcase-let
+      ((`(,_ ,channel ,login ,host ,_server ,nick ,_flags, hop-real) args))
+    (when (and (string= channel "*") (erc-nick-equal-p nick target-nick))
+      (if-let ((user (erc-get-server-user nick)))
+          (erc-update-user user nick host login
+                           (erc--extract-352-full-name hop-real))
+        ;; Don't add unless target is already known.
+        (when (erc-get-buffer nick erc-server-process)
+          (erc-add-server-user
+           nick (make-erc-server-user
+                 :nickname nick :login login :host host
+                 :full-name (erc--extract-352-full-name hop-real)))))
+      (erc--ensure-query-member nick)
+      t)))
+
+;; This uses heuristics to associate replies to the initial request
+;; because ERC does not yet support `labeled-response'.
+(defun erc--querypoll-send (server-buffer)
+  "Send a captive \"WHO\" in SERVER-BUFFER."
+  (when (and (buffer-live-p server-buffer)
+             (buffer-local-value 'erc-server-connected server-buffer))
+    (with-current-buffer server-buffer
+      (setq erc--querypoll-timer nil)
+      (if-let ((buffer (erc--querypoll-get-next erc--querypoll-ring)))
+          (letrec
+              ((target (erc--target-string
+                        (buffer-local-value 'erc--target buffer)))
+               (penalty 0)
+               (here-fn (erc-once-with-server-event
+                         "352" (lambda (_ parsed)
+                                 (erc--querypoll-on-352
+                                  target (erc-response.command-args parsed)))))
+               (done-fn (erc-once-with-server-event
+                         "315"
+                         (lambda (_ parsed)
+                           (if (memq here-fn erc-server-352-functions)
+                               (erc-remove-user
+                                (nth 1 (erc-response.command-args parsed)))
+                             (remove-hook 'erc-server-352-functions here-fn t))
+                           (remove-hook 'erc-server-263-functions fail-fn t)
+                           (remove-hook 'erc-server-315-functions done-fn t)
+                           (erc--querypoll-subscribe buffer penalty)
+                           t)))
+               (fail-fn (erc-once-with-server-event
+                         "263"
+                         (lambda (proc parsed)
+                           (setq penalty 60)
+                           (funcall done-fn proc parsed)
+                           t))))
+            (erc-server-send (concat "WHO " target)))
+        (unless (ring-empty-p erc--querypoll-ring)
+          (erc--querypoll-subscribe nil 30))))))
 
 (provide 'erc-goodies)
 

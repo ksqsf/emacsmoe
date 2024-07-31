@@ -185,22 +185,22 @@ DOC is a string where \"FUNCTION\" and \"OLDFUN\" are expected.")
 (defun advice--interactive-form-1 (function)
   "Like `interactive-form' but preserves the static context if needed."
   (let ((if (interactive-form function)))
-    (if (or (null if) (not (eq 'closure (car-safe function))))
+    (if (not (and if (interpreted-function-p function)))
         if
       (cl-assert (eq 'interactive (car if)))
       (let ((form (cadr if)))
-        (if (macroexp-const-p form)
+        (if (macroexp-const-p form)     ;Common case: a string.
             if
           ;; The interactive is expected to be run in the static context
           ;; that the function captured.
-          (let ((ctx (nth 1 function)))
+          (let ((ctx (aref function 2)))
             `(interactive
               ,(let* ((f (if (eq 'function (car-safe form)) (cadr form) form)))
                  ;; If the form jut returns a function, preserve the fact that
                  ;; it just returns a function, which is an info we use in
                  ;; `advice--make-interactive-form'.
                  (if (eq 'lambda (car-safe f))
-                     `',(eval form ctx)
+                     (eval form ctx)
                    `(eval ',form ',ctx))))))))))
 
 (defun advice--interactive-form (function)

@@ -112,6 +112,7 @@ srcs = \
   $(srcdir)/os.texi \
   $(srcdir)/package.texi \
   $(srcdir)/parsing.texi \
+  $(srcdir)/peg.texi \
   $(srcdir)/positions.texi \
   $(srcdir)/processes.texi \
   $(srcdir)/records.texi \
@@ -144,7 +145,15 @@ ps: $(PS_TARGETS)
 ${buildinfodir}:
 	${MKDIR_P} $@
 
-$(buildinfodir)/elisp.info: $(srcs) | ${buildinfodir}
+auxfiles = $(buildinfodir)/elisp_type_hierarchy.txt $(buildinfodir)/elisp_type_hierarchy.jpg
+
+$(buildinfodir)/elisp_type_hierarchy.txt: $(srcdir)/elisp_type_hierarchy.txt | ${buildinfodir}
+	cp $< $@
+
+$(buildinfodir)/elisp_type_hierarchy.jpg: $(srcdir)/elisp_type_hierarchy.jpg | ${buildinfodir}
+	cp $< $@
+
+$(buildinfodir)/elisp.info: $(srcs) $(auxfiles) | ${buildinfodir}
 	$(AM_V_GEN)$(MAKEINFO) $(MAKEINFO_OPTS) $(INFO_OPTS) -o $@ $<
 
 elisp.dvi: $(srcs)
@@ -179,6 +188,7 @@ infoclean:
 	  $(buildinfodir)/elisp.info \
 	  $(buildinfodir)/elisp.info-[1-9] \
 	  $(buildinfodir)/elisp.info-[1-9][0-9]
+	rm -f $(auxfiles)
 
 bootstrap-clean maintainer-clean: distclean infoclean
 	rm -f TAGS

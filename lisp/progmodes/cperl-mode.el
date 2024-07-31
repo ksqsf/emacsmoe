@@ -1178,7 +1178,12 @@ The expansion is entirely correct because it uses the C preprocessor."
 (eval-and-compile
 
   (defconst cperl--basic-identifier-rx
-    '(sequence (or alpha "_") (* (or word "_")))
+    ;; The rx expression in the following line is a workaround for
+    ;; bug#70948 under Emacs 29
+    '(regex "[_[:alpha:]][_[:word:]]*")
+    ;; The rx expression in the following line is equivalent but
+    ;; inefficient under Emacs 29.3
+    ;; '(sequence (or alpha "_") (* (or word "_")))
     "A regular expression for the name of a \"basic\" Perl variable.
 Neither namespace separators nor sigils are included.  As is,
 this regular expression applies to labels,subroutine calls where
@@ -1933,6 +1938,9 @@ or as help on variables `cperl-tips', `cperl-problems',
   (add-hook 'hack-local-variables-hook #'cperl--set-file-style nil t)
   ;; Setup Flymake
   (add-hook 'flymake-diagnostic-functions #'perl-flymake nil t))
+
+(when (fboundp 'derived-mode-add-parents) ; to run under Emacs <30
+  (derived-mode-add-parents 'cperl-mode '(perl-mode)))
 
 (defun cperl--set-file-style ()
   (when cperl-file-style
@@ -4014,7 +4022,10 @@ recursive calls in starting lines of here-documents."
 		;; 1+6+2+1+1+6+1+1+1=20 extra () before this:
 		"\\|"
                 ;; -------- backslash-escaped stuff, don't interpret it
-		"\\\\\\(['`\"($]\\)")	; BACKWACKED something-hairy
+		"\\\\\\(['`\"($]\\)"	; BACKWACKED something-hairy
+                "\\|"
+                ;; -------- $\ is a variable in code, but not in a string
+                "\\(\\$\\\\\\)")
 	     "")))
          warning-message)
     (unwind-protect
@@ -4068,7 +4079,12 @@ recursive calls in starting lines of here-documents."
 		  (cperl-modify-syntax-type bb cperl-st-punct)))
 	       ;; No processing in strings/comments beyond this point:
 	       ((or (nth 3 state) (nth 4 state))
-		t)			; Do nothing in comment/string
+                ;; Edge case: In a double-quoted string, $\ is not the
+                ;; punctuation variable, $ must not quote \ here.  We
+                ;; generally make $ a punctuation character in strings
+                ;; and comments (Bug#69604).
+                (when (match-beginning 22)
+                  (cperl-modify-syntax-type (match-beginning 22) cperl-st-punct)))
 	       ((match-beginning 1)	; POD section
 		;;  "\\(\\`\n?\\|^\n\\)="
 		(setq b (match-beginning 0)

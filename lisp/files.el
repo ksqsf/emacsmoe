@@ -698,6 +698,14 @@ Also see the `permanently-enabled-local-variables' and
 Some modes may wish to set this to nil to prevent directory-local
 settings being applied, but still respect file-local ones.")
 
+(defvar-local untrusted-content nil
+  "Non-nil means that current buffer originated from an untrusted source.
+Email clients and some other modes may set this non-nil to mark the
+buffer contents as untrusted.
+
+This variable might be subject to change without notice.")
+(put 'untrusted-content 'permanent-local t)
+
 ;; This is an odd variable IMO.
 ;; You might wonder why it is needed, when we could just do:
 ;; (setq-local enable-local-variables nil)
@@ -854,6 +862,7 @@ GNU and Unix systems).  Substitute environment variables into the
 resulting list of directory names.  For an empty path element (i.e.,
 a leading or trailing separator, or two adjacent separators), return
 nil (meaning `default-directory') as the associated list element."
+  (declare (ftype (function (string) list)))
   (when (stringp search-path)
     (let ((spath (substitute-env-vars search-path))
           (double-slash-special-p
@@ -1496,27 +1505,28 @@ containing it, until no links are left at any level.
 			(new (file-name-as-directory (file-truename dirfile counter prev-dirs))))
 		    (setcar prev-dirs (cons (cons old new) (car prev-dirs)))
 		    (setq dir new))))
-	    (if (equal ".." (file-name-nondirectory filename))
-		(setq filename
-		      (directory-file-name (file-name-directory (directory-file-name dir)))
-		      done t)
-	      (if (equal "." (file-name-nondirectory filename))
-		  (setq filename (directory-file-name dir)
-			done t)
-		;; Put it back on the file name.
-		(setq filename (concat dir (file-name-nondirectory filename)))
-		;; Is the file name the name of a link?
-		(setq target (file-symlink-p filename))
-		(if target
-		    ;; Yes => chase that link, then start all over
-		    ;; since the link may point to a directory name that uses links.
-		    ;; We can't safely use expand-file-name here
-		    ;; since target might look like foo/../bar where foo
-		    ;; is itself a link.  Instead, we handle . and .. above.
-		    (setq filename (files--splice-dirname-file dir target)
-			  done nil)
-		  ;; No, we are done!
-		  (setq done t))))))))
+            (let ((filename-no-dir (file-name-nondirectory filename)))
+	      (if (equal ".." filename-no-dir)
+		  (setq filename
+		        (directory-file-name (file-name-directory (directory-file-name dir)))
+		        done t)
+	        (if (equal "." filename-no-dir)
+		    (setq filename (directory-file-name dir)
+			  done t)
+		  ;; Put it back on the file name.
+		  (setq filename (concat dir filename-no-dir))
+		  ;; Is the file name the name of a link?
+		  (setq target (file-symlink-p filename))
+		  (if target
+		      ;; Yes => chase that link, then start all over
+		      ;; since the link may point to a directory name that uses links.
+		      ;; We can't safely use expand-file-name here
+		      ;; since target might look like foo/../bar where foo
+		      ;; is itself a link.  Instead, we handle . and .. above.
+		      (setq filename (files--splice-dirname-file dir target)
+			    done nil)
+		    ;; No, we are done!
+		    (setq done t)))))))))
     filename))
 
 (defun file-chase-links (filename &optional limit)
@@ -2105,6 +2115,15 @@ killed."
 	(rename-buffer oname)))
     (unless (eq (current-buffer) obuf)
       (with-current-buffer obuf
+	;; Restore original buffer's file names so they can be still
+	;; used when referencing the now defunct buffer (Bug#68235).
+	(setq buffer-file-name ofile)
+	(setq buffer-file-number onum)
+	(setq buffer-file-truename otrue)
+	(unless (get-buffer oname)
+	  ;; Restore original's buffer name so 'kill-buffer' can use it
+	  ;; to assign its last name (Bug#68235).
+	  (rename-buffer oname))
 	;; We already ran these; don't run them again.
 	(let (kill-buffer-query-functions kill-buffer-hook)
 	  (kill-buffer obuf))))))
@@ -3413,7 +3432,7 @@ checks if it uses an interpreter listed in `interpreter-mode-alist',
 matches the buffer beginning against `magic-mode-alist',
 compares the file name against the entries in `auto-mode-alist',
 then matches the buffer beginning against `magic-fallback-mode-alist'.
-It also obeys `major-mode-remap-alist'.
+It also obeys `major-mode-remap-alist' and `major-mode-remap-defaults'.
 
 If `enable-local-variables' is nil, or if the file name matches
 `inhibit-local-variables-regexps', this function does not check
@@ -3425,7 +3444,7 @@ set the major mode only if that would change it.  In other words
 we don't actually set it to the same mode the buffer already has."
   ;; Look for -*-MODENAME-*- or -*- ... mode: MODENAME; ... -*-
   (let ((try-locals (not (inhibit-local-variables-p)))
-	end done mode modes)
+	end modes)
     ;; Once we drop the deprecated feature where mode: is also allowed to
     ;; specify minor-modes (ie, there can be more than one "mode:"), we can
     ;; remove this section and just let (hack-local-variables t) handle it.
@@ -3456,100 +3475,96 @@ we don't actually set it to the same mode the buffer already has."
 	     (push (intern (concat (downcase (buffer-substring (point) end))
 				   "-mode"))
 		   modes))))
-    ;; If we found modes to use, invoke them now, outside the save-excursion.
-    (if modes
-	(catch 'nop
-	  (dolist (mode (nreverse modes))
-	    (if (not (functionp mode))
-		(message "Ignoring unknown mode `%s'" mode)
-	      (setq done t)
-	      (or (set-auto-mode-0 mode keep-mode-if-same)
-		  ;; continuing would call minor modes again, toggling them off
-		  (throw 'nop nil))))))
-    ;; Check for auto-mode-alist entry in dir-locals.
-    (unless done
-      (with-demoted-errors "Directory-local variables error: %s"
-	;; Note this is a no-op if enable-local-variables is nil.
-        (let* ((mode-alist (cdr (hack-dir-local--get-variables
-                                 (lambda (key) (eq key 'auto-mode-alist))))))
-          (setq done (set-auto-mode--apply-alist mode-alist
-                                                 keep-mode-if-same t)))))
-    (and (not done)
-	 (setq mode (hack-local-variables t (not try-locals)))
-	 (not (memq mode modes))	; already tried and failed
-	 (if (not (functionp mode))
-	     (message "Ignoring unknown mode `%s'" mode)
-	   (setq done t)
-	   (set-auto-mode-0 mode keep-mode-if-same)))
-    ;; If we didn't, look for an interpreter specified in the first line.
-    ;; As a special case, allow for things like "#!/bin/env perl", which
-    ;; finds the interpreter anywhere in $PATH.
-    (and (not done)
-	 (setq mode (save-excursion
-		      (goto-char (point-min))
-		      (if (looking-at auto-mode-interpreter-regexp)
-			  (match-string 2))))
-	 ;; Map interpreter name to a mode, signaling we're done at the
-	 ;; same time.
-	 (setq done (assoc-default
-		     (file-name-nondirectory mode)
-		     (mapcar (lambda (e)
-                               (cons
-                                (format "\\`%s\\'" (car e))
-                                (cdr e)))
-			     interpreter-mode-alist)
-		     #'string-match-p))
-	 ;; If we found an interpreter mode to use, invoke it now.
-	 (set-auto-mode-0 done keep-mode-if-same))
-    ;; Next try matching the buffer beginning against magic-mode-alist.
-    (unless done
-      (if (setq done (save-excursion
-		       (goto-char (point-min))
-		       (save-restriction
-			 (narrow-to-region (point-min)
-					   (min (point-max)
-						(+ (point-min) magic-mode-regexp-match-limit)))
-                         (assoc-default
-                          nil magic-mode-alist
-                          (lambda (re _dummy)
-                            (cond
-                             ((functionp re)
-                              (funcall re))
-                             ((stringp re)
-                              (let ((case-fold-search nil))
-                                (looking-at re)))
-                             (t
-                              (error
-                               "Problem in magic-mode-alist with element %s"
-                               re))))))))
-	  (set-auto-mode-0 done keep-mode-if-same)))
-    ;; Next compare the filename against the entries in auto-mode-alist.
-    (unless done
-      (setq done (set-auto-mode--apply-alist auto-mode-alist
-                                             keep-mode-if-same nil)))
-    ;; Next try matching the buffer beginning against magic-fallback-mode-alist.
-    (unless done
-      (if (setq done (save-excursion
-		       (goto-char (point-min))
-		       (save-restriction
-			 (narrow-to-region (point-min)
-					   (min (point-max)
-						(+ (point-min) magic-mode-regexp-match-limit)))
-			 (assoc-default nil magic-fallback-mode-alist
-                                        (lambda (re _dummy)
-                                          (cond
-                                           ((functionp re)
-                                            (funcall re))
-                                           ((stringp re)
-                                            (let ((case-fold-search nil))
-                                              (looking-at re)))
-                                           (t
-                                            (error
-                                             "Problem with magic-fallback-mode-alist element: %s"
-                                             re))))))))
-	  (set-auto-mode-0 done keep-mode-if-same)))
-    (unless done
-      (set-buffer-major-mode (current-buffer)))))
+    (or
+     ;; If we found modes to use, invoke them now, outside the save-excursion.
+     ;; Presume `modes' holds a major mode followed by minor modes.
+     (let ((done ()))
+       (dolist (mode (nreverse modes))
+	 (if (eq done :keep)
+	     ;; `keep-mode-if-same' is set and the (major) mode
+	     ;; was already set.  Refrain from calling the following
+	     ;; minor modes since they have already been set.
+	     ;; It was especially important in the past when calling
+	     ;; minor modes without an arg would toggle them, but it's
+             ;; still preferable to avoid re-enabling them,
+	     nil
+	   (let ((res (set-auto-mode-0 mode keep-mode-if-same)))
+	     (setq done (or res done)))))
+       done)
+     ;; Check for auto-mode-alist entry in dir-locals.
+     (with-demoted-errors "Directory-local variables error: %s"
+       ;; Note this is a no-op if enable-local-variables is nil.
+       (let* ((mode-alist (cdr (hack-dir-local--get-variables
+                                (lambda (key) (eq key 'auto-mode-alist))))))
+         (set-auto-mode--apply-alist mode-alist keep-mode-if-same t)))
+     (let ((mode (hack-local-variables t (not try-locals))))
+       (unless (memq mode modes)	; already tried and failed
+         (set-auto-mode-0 mode keep-mode-if-same)))
+     ;; If we didn't, look for an interpreter specified in the first line.
+     ;; As a special case, allow for things like "#!/bin/env perl", which
+     ;; finds the interpreter anywhere in $PATH.
+     (when-let
+	 ((interp (save-excursion
+		    (goto-char (point-min))
+		    (if (looking-at auto-mode-interpreter-regexp)
+			(match-string 2))))
+	  ;; Map interpreter name to a mode, signaling we're done at the
+	  ;; same time.
+	  (mode (assoc-default
+		 (file-name-nondirectory interp)
+		 (mapcar (lambda (e)
+                           (cons
+                            (format "\\`%s\\'" (car e))
+                            (cdr e)))
+			 interpreter-mode-alist)
+		 #'string-match-p)))
+       ;; If we found an interpreter mode to use, invoke it now.
+       (set-auto-mode-0 mode keep-mode-if-same))
+     ;; Next try matching the buffer beginning against magic-mode-alist.
+     (let ((mode (save-excursion
+		   (goto-char (point-min))
+		   (save-restriction
+		     (narrow-to-region (point-min)
+				       (min (point-max)
+					    (+ (point-min) magic-mode-regexp-match-limit)))
+                     (assoc-default
+                      nil magic-mode-alist
+                      (lambda (re _dummy)
+                        (cond
+                         ((functionp re)
+                          (funcall re))
+                         ((stringp re)
+                          (let ((case-fold-search nil))
+                            (looking-at re)))
+                         (t
+                          (error
+                           "Problem in magic-mode-alist with element %s"
+                           re)))))))))
+       (set-auto-mode-0 mode keep-mode-if-same))
+     ;; Next compare the filename against the entries in auto-mode-alist.
+     (set-auto-mode--apply-alist auto-mode-alist
+                                 keep-mode-if-same nil)
+     ;; Next try matching the buffer beginning against magic-fallback-mode-alist.
+     (let ((mode (save-excursion
+		   (goto-char (point-min))
+		   (save-restriction
+		     (narrow-to-region (point-min)
+				       (min (point-max)
+					    (+ (point-min) magic-mode-regexp-match-limit)))
+		     (assoc-default nil magic-fallback-mode-alist
+                                    (lambda (re _dummy)
+                                      (cond
+                                       ((functionp re)
+                                        (funcall re))
+                                       ((stringp re)
+                                        (let ((case-fold-search nil))
+                                          (looking-at re)))
+                                       (t
+                                        (error
+                                         "Problem with magic-fallback-mode-alist element: %s"
+                                         re)))))))))
+       (set-auto-mode-0 mode keep-mode-if-same))
+     (set-buffer-major-mode (current-buffer)))))
 
 (defvar-local set-auto-mode--last nil
   "Remember the mode we have set via `set-auto-mode-0'.")
@@ -3559,8 +3574,21 @@ we don't actually set it to the same mode the buffer already has."
 Every entry is of the form (MODE . FUNCTION) which means that in order
 to activate the major mode MODE (specified via something like
 `auto-mode-alist', file-local variables, ...) we should actually call
-FUNCTION instead."
+FUNCTION instead.
+FUNCTION can be nil to hide other entries (either in this var or in
+`major-mode-remap-defaults') and means that we should call MODE."
   :type '(alist (symbol) (function)))
+
+(defvar major-mode-remap-defaults nil
+  "Alist mapping file-specified mode to actual mode.
+This works like `major-mode-remap-alist' except it has lower priority
+and it is meant to be modified by packages rather than users.")
+
+(defun major-mode-remap (mode)
+  "Return the function to use to enable MODE."
+  (or (cdr (or (assq mode major-mode-remap-alist)
+               (assq mode major-mode-remap-defaults)))
+      mode))
 
 ;; When `keep-mode-if-same' is set, we are working on behalf of
 ;; set-visited-file-name.  In that case, if the major mode specified is the
@@ -3570,18 +3598,29 @@ FUNCTION instead."
   "Apply MODE and return it.
 If optional arg KEEP-MODE-IF-SAME is non-nil, MODE is chased of
 any aliases and compared to current major mode.  If they are the
-same, do nothing and return nil."
-  (unless (and keep-mode-if-same
-	       (or (eq (indirect-function mode)
-		       (indirect-function major-mode))
-		   (and set-auto-mode--last
-		        (eq mode (car set-auto-mode--last))
-		        (eq major-mode (cdr set-auto-mode--last)))))
-    (when mode
-      (funcall (alist-get mode major-mode-remap-alist mode))
-      (unless (eq mode major-mode)
-        (setq set-auto-mode--last (cons mode major-mode)))
-      mode)))
+same, do nothing and return `:keep'.
+Return nil if MODE could not be applied."
+  (when mode
+    (if (and keep-mode-if-same
+	     (or (eq (indirect-function mode)
+		     (indirect-function major-mode))
+		 (and set-auto-mode--last
+		      (eq mode (car set-auto-mode--last))
+		      (eq major-mode (cdr set-auto-mode--last)))))
+	:keep
+      (let ((modefun (major-mode-remap mode)))
+        (if (not (functionp modefun))
+            (progn
+              (message "Ignoring unknown mode `%s'%s" mode
+                       (if (eq mode modefun) ""
+                         (format " (remapped to `%S')" modefun)))
+              nil)
+          (funcall modefun)
+          (unless (or (eq mode major-mode) ;`set-auto-mode--last' is overkill.
+                      ;; `modefun' is something like a minor mode.
+                      (local-variable-p 'set-auto-mode--last))
+            (setq set-auto-mode--last (cons mode major-mode)))
+          mode)))))
 
 (defvar file-auto-mode-skip "^\\(#!\\|'\\\\\"\\)"
   "Regexp of lines to skip when looking for file-local settings.
@@ -4188,8 +4227,9 @@ major-mode."
 			   (not (string-match
 			         "-minor\\'"
 			         (setq val2 (downcase (symbol-name val)))))
-                           ;; Allow several mode: elements.
-                           (push (intern (concat val2 "-mode")) result))
+			   (let ((mode (intern (concat val2 "-mode"))))
+                             (when (fboundp (major-mode-remap mode))
+                               (setq result mode))))
 		    (cond ((eq var 'coding))
 			  ((eq var 'lexical-binding)
 			   (unless hack-local-variables--warned-lexical
@@ -4220,10 +4260,7 @@ major-mode."
 				         val)
                                    result))))))
 	        (forward-line 1)))))))
-    (if (eq handle-mode t)
-        ;; Return the final mode: setting that's defined.
-        (car (seq-filter #'fboundp result))
-      result)))
+    result))
 
 (defun hack-local-variables-apply ()
   "Apply the elements of `file-local-variables-alist'.
@@ -4352,10 +4389,8 @@ already the major mode."
   (pcase var
     ('mode
      (let ((mode (intern (concat (downcase (symbol-name val))
-                                 "-mode"))))
-       (unless (eq (indirect-function mode)
-                   (indirect-function major-mode))
-         (funcall mode))))
+                          "-mode"))))
+       (set-auto-mode-0 mode t)))
     ('eval
      (pcase val
        (`(add-hook ',hook . ,_) (hack-one-local-variable--obsolete hook)))
@@ -4435,6 +4470,12 @@ to see whether it should be considered."
                   (funcall predicate key)
                 (or (not key)
                     (derived-mode-p key)))
+              ;; If KEY is an extra parent it may remain not loaded
+              ;; (hence with some of its mode-specific vars missing their
+              ;; `safe-local-variable' property), leading to spurious
+              ;; prompts about unsafe vars (bug#68246).
+              (if (and (symbolp key) (autoloadp (indirect-function key)))
+                  (ignore-errors (autoload-do-load (indirect-function key))))
               (let* ((alist (cdr entry))
                      (subdirs (assq 'subdirs alist)))
                 (if (or (not subdirs)
@@ -8773,9 +8814,10 @@ Otherwise, trash FILENAME using the freedesktop.org conventions,
   ;; If `system-move-file-to-trash' is defined, use it.
   (cond ((fboundp 'system-move-file-to-trash)
 	 (system-move-file-to-trash filename))
-        (trash-directory
+        ((connection-local-value trash-directory)
 	 ;; If `trash-directory' is non-nil, move the file there.
-	 (let* ((trash-dir   (expand-file-name trash-directory))
+	 (let* ((trash-dir   (expand-file-name
+                              (connection-local-value trash-directory)))
 		(fn          (directory-file-name (expand-file-name filename)))
 		(new-fn      (concat (file-name-as-directory trash-dir)
 				     (file-name-nondirectory fn))))

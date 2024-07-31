@@ -464,7 +464,8 @@ Each DISPLAY can have the following values:
 In the ATTS property list, possible attributes are `:family',
 `:width', `:height', `:weight', `:slant', `:underline',
 `:overline', `:strike-through', `:box', `:foreground',
-`:background', `:stipple', `:inverse-video', and `:inherit'.
+`:background', `:stipple', `:inverse-video', `:shadow', and
+`:inherit'.
 
 See Info node `(elisp) Faces' in the Emacs Lisp manual for more
 information."
@@ -667,7 +668,8 @@ If NOSET is non-nil, don't bother autoloading LOAD when setting the variable."
 A customizable variable is either (i) a variable whose property
 list contains a non-nil `standard-value' or `custom-autoload'
 property, or (ii) an alias for another customizable variable."
-  (declare (side-effect-free t))
+  (declare (ftype (function (symbol) t))
+           (side-effect-free t))
   (when (symbolp variable)
     (setq variable (indirect-variable variable))
     (or (get variable 'standard-value)

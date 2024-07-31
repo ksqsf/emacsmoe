@@ -2774,8 +2774,8 @@ dump_obarray_buckets (struct dump_context *ctx, const struct Lisp_Obarray *o)
 static dump_off
 dump_obarray (struct dump_context *ctx, Lisp_Object object)
 {
-#if CHECK_STRUCTS && !defined HASH_Lisp_Obarray_XXXXXXXXXX
-# error "Lisp_Hash_Table changed. See CHECK_STRUCTS comment in config.h."
+#if CHECK_STRUCTS && !defined HASH_Lisp_Obarray_D2757E61AD
+# error "Lisp_Obarray changed. See CHECK_STRUCTS comment in config.h."
 #endif
   const struct Lisp_Obarray *in_oa = XOBARRAY (object);
   struct Lisp_Obarray munged_oa = *in_oa;
@@ -2796,7 +2796,7 @@ dump_obarray (struct dump_context *ctx, Lisp_Object object)
 static dump_off
 dump_buffer (struct dump_context *ctx, const struct buffer *in_buffer)
 {
-#if CHECK_STRUCTS && !defined HASH_buffer_EBBA38AEFA
+#if CHECK_STRUCTS && !defined HASH_buffer_B02F648B82
 # error "buffer changed. See CHECK_STRUCTS comment in config.h."
 #endif
   struct buffer munged_buffer = *in_buffer;
@@ -2808,6 +2808,7 @@ dump_buffer (struct dump_context *ctx, const struct buffer *in_buffer)
   else
     eassert (buffer->window_count == -1);
   buffer->local_minor_modes_ = Qnil;
+  buffer->last_name_ = Qnil;
   buffer->last_selected_window_ = Qnil;
   buffer->display_count_ = make_fixnum (0);
   buffer->clip_changed = 0;
@@ -3049,7 +3050,7 @@ dump_vectorlike (struct dump_context *ctx,
                  Lisp_Object lv,
                  dump_off offset)
 {
-#if CHECK_STRUCTS && !defined HASH_pvec_type_D8A254BC70
+#if CHECK_STRUCTS && !defined HASH_pvec_type_99104541E2
 # error "pvec_type changed. See CHECK_STRUCTS comment in config.h."
 #endif
   const struct Lisp_Vector *v = XVECTOR (lv);
@@ -3067,7 +3068,7 @@ dump_vectorlike (struct dump_context *ctx,
         error_unsupported_dump_object(ctx, lv, "font");
       FALLTHROUGH;
     case PVEC_NORMAL_VECTOR:
-    case PVEC_COMPILED:
+    case PVEC_CLOSURE:
     case PVEC_CHAR_TABLE:
     case PVEC_SUB_CHAR_TABLE:
     case PVEC_RECORD:
@@ -3367,7 +3368,7 @@ dump_sort_copied_objects (struct dump_context *ctx)
      file and the copy into Emacs in-order, where prefetch will be
      most effective.  */
   ctx->copied_queue =
-    Fsort (Fnreverse (ctx->copied_queue),
+    CALLN (Fsort, Fnreverse (ctx->copied_queue),
            Qdump_emacs_portable__sort_predicate_copied);
 }
 
@@ -3934,7 +3935,7 @@ drain_reloc_list (struct dump_context *ctx,
 {
   struct dump_flags old_flags = ctx->flags;
   ctx->flags.pack_objects = true;
-  Lisp_Object relocs = Fsort (Fnreverse (*reloc_list),
+  Lisp_Object relocs = CALLN (Fsort, Fnreverse (*reloc_list),
                               Qdump_emacs_portable__sort_predicate);
   *reloc_list = Qnil;
   dump_align_output (ctx, max (alignof (struct dump_reloc),
@@ -4056,7 +4057,7 @@ static void
 dump_do_fixups (struct dump_context *ctx)
 {
   dump_off saved_offset = ctx->offset;
-  Lisp_Object fixups = Fsort (Fnreverse (ctx->fixups),
+  Lisp_Object fixups = CALLN (Fsort, Fnreverse (ctx->fixups),
                               Qdump_emacs_portable__sort_predicate);
   Lisp_Object prev_fixup = Qnil;
   ctx->fixups = Qnil;
@@ -4155,7 +4156,7 @@ types.  */)
   /* Bind `command-line-processed' to nil before dumping,
      so that the dumped Emacs will process its command line
      and set up to work with X windows if appropriate.  */
-  Lisp_Object symbol = intern ("command-line-processed");
+  Lisp_Object symbol = Qcommand_line_processed;
   specbind (symbol, Qnil);
 
   CHECK_STRING (filename);

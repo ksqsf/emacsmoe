@@ -1159,14 +1159,15 @@ argument or if the current major mode has no known group, prompt
 for the MODE to customize."
   (interactive
    (list
-    (let ((completion-regexp-list '("-mode\\'"))
-	  (group (custom-group-of-mode major-mode)))
+    (let ((group (custom-group-of-mode major-mode)))
       (if (and group (not current-prefix-arg))
 	  major-mode
 	(intern
 	 (completing-read (format-prompt "Mode" (and group major-mode))
 			  obarray
-			  'custom-group-of-mode
+			  (lambda (s)
+			    (and (string-match "-mode\\'" (symbol-name s))
+			         (custom-group-of-mode s)))
 			  t nil nil (if group (symbol-name major-mode))))))))
   (customize-group (custom-group-of-mode mode)))
 
@@ -2250,24 +2251,33 @@ and `face'."
 ;;; The `custom' Widget.
 
 (defface custom-button
-  '((((type x w32 ns haiku pgtk android) (class color))	; Like default mode line
+  '((((type x w32 ns haiku pgtk android) (class color)
+      (min-colors 88))	; Like default mode line
      :box (:line-width 2 :style released-button)
-     :background "lightgrey" :foreground "black"))
+     :background "lightgrey" :foreground "black")
+    (((type x w32 ns haiku pgtk android))
+     :box (:line-width 2 :style released-button)
+     :background "white" :foreground "black"))
   "Face for custom buffer buttons if `custom-raised-buttons' is non-nil."
-  :version "21.1"
+  :version "30.1"
   :group 'custom-faces)
 
 (defface custom-button-mouse
-  '((((type x w32 ns haiku pgtk android) (class color))
+  '((((type x w32 ns haiku pgtk android) (class color)
+      (min-colors 88))
      :box (:line-width 2 :style released-button)
      :background "grey90" :foreground "black")
+    (((type x w32 ns haiku pgtk android))
+     :box (:line-width 2 :style released-button)
+     ;; Either light gray or a stipple pattern.
+     :background "gray20" :foreground "black")
     (t
      ;; This is for text terminals that support mouse, like GPM mouse
      ;; or the MS-DOS terminal: inverse-video makes the button stand
      ;; out on mouse-over.
      :inverse-video t))
   "Mouse face for custom buffer buttons if `custom-raised-buttons' is non-nil."
-  :version "22.1"
+  :version "30.1"
   :group 'custom-faces)
 
 (defface custom-button-unraised
@@ -2283,12 +2293,16 @@ and `face'."
       (if custom-raised-buttons 'custom-button-mouse 'highlight))
 
 (defface custom-button-pressed
-  '((((type x w32 ns haiku pgtk android) (class color))
+  '((((type x w32 ns haiku pgtk android) (class color grayscale))
      :box (:line-width 2 :style pressed-button)
      :background "lightgrey" :foreground "black")
+    (((type x w32 ns haiku pgtk android))
+     :box (:line-width 2 :style pressed-button)
+     ;; Either light gray or a stipple pattern.
+     :background "gray20" :foreground "black")
     (t :inverse-video t))
   "Face for pressed custom buttons if `custom-raised-buttons' is non-nil."
-  :version "21.1"
+  :version "30.1"
   :group 'custom-faces)
 
 (defface custom-button-pressed-unraised
@@ -4956,10 +4970,17 @@ if only the first line of the docstring is shown."))
             ;; can cause problems when read back, so print them
             ;; readably.  (Bug#52554)
             (print-escape-control-characters t))
-        (atomic-change-group
-	  (custom-save-variables)
-	  (custom-save-faces)
-          (custom-save-icons)))
+        ;; Insert lexical cookie, but only if the buffer is empty.
+        (save-restriction
+          (widen)
+          (atomic-change-group
+            (when (eq (point-min) (point-max))
+              (save-excursion
+                (goto-char (point-min))
+                (insert ";;; -*- lexical-binding: t -*-\n")))
+	    (custom-save-variables)
+	    (custom-save-faces)
+            (custom-save-icons))))
       (let ((file-precious-flag t))
 	(save-buffer))
       (if old-buffer
@@ -5349,6 +5370,12 @@ If several parents are listed, go to the first of them."
     (setq-local widget-link-suffix ""))
   (setq show-trailing-whitespace nil))
 
+(defvar touch-screen-keyboard-function) ; In touch-screen.el.
+
+(defun Custom-display-on-screen-keyboard-p ()
+  "Return whether it is okay to display the virtual keyboard at point."
+  (get-char-property (point) 'field))
+
 (define-derived-mode Custom-mode nil "Custom"
   "Major mode for editing customization buffers.
 
@@ -5386,6 +5413,9 @@ if that value is non-nil."
   (setq-local custom--invocation-options nil
               custom--hidden-state 'hidden)
   (setq-local revert-buffer-function #'custom--revert-buffer)
+  (setq-local text-conversion-style 'action)
+  (setq-local touch-screen-keyboard-function
+              #'Custom-display-on-screen-keyboard-p)
   (make-local-variable 'custom-options)
   (make-local-variable 'custom-local-buffer)
   (custom--initialize-widget-variables)

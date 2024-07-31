@@ -1171,7 +1171,22 @@ leading double colon is not added."
                                 "global_variable"
                                 )
                                eol)
-                              #'ruby-ts--sexp-p)))))
+                              #'ruby-ts--sexp-p))
+                 (text ,(lambda (node)
+                          (or (member (treesit-node-type node)
+                                      '("comment" "string_content" "heredoc_content"))
+                              ;; for C-M-f in hash[:key] and hash['key']
+                              (and (member (treesit-node-text node)
+                                           '("[" "]"))
+                                   (equal (treesit-node-type
+                                           (treesit-node-parent node))
+                                          "element_reference"))
+                              ;; for C-M-f in "abc #{ghi} def"
+                              (and (member (treesit-node-text node)
+                                           '("#{" "}"))
+                                   (equal (treesit-node-type
+                                           (treesit-node-parent node))
+                                          "interpolation"))))))))
 
   ;; AFAIK, Ruby can not nest methods
   (setq-local treesit-defun-prefer-top-level nil)
@@ -1210,19 +1225,11 @@ leading double colon is not added."
 
   (setq-local syntax-propertize-function #'ruby-ts--syntax-propertize))
 
+(derived-mode-add-parents 'ruby-ts-mode '(ruby-mode))
+
 (if (treesit-ready-p 'ruby)
-    ;; Copied from ruby-mode.el.
-    (add-to-list 'auto-mode-alist
-                 (cons (concat "\\(?:\\.\\(?:"
-                               "rbw?\\|ru\\|rake\\|thor"
-                               "\\|jbuilder\\|rabl\\|gemspec\\|podspec"
-                               "\\)"
-                               "\\|/"
-                               "\\(?:Gem\\|Rake\\|Cap\\|Thor"
-                               "\\|Puppet\\|Berks\\|Brew"
-                               "\\|Vagrant\\|Guard\\|Pod\\)file"
-                               "\\)\\'")
-                       'ruby-ts-mode)))
+    (add-to-list 'major-mode-remap-defaults
+                 '(ruby-mode . ruby-ts-mode)))
 
 (provide 'ruby-ts-mode)
 

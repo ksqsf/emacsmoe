@@ -2572,7 +2572,7 @@ parse_root (const char * name, const char ** pPath)
       name += 2;
       do
         {
-	  if (IS_DIRECTORY_SEP (*name) && --slashes == 0)
+	  if (!*name || (IS_DIRECTORY_SEP (*name) && --slashes == 0))
 	    break;
 	  name++;
 	}
@@ -10392,10 +10392,15 @@ check_windows_init_file (void)
     }
 }
 
+/* from w32fns.c */
+extern void remove_w32_kbdhook (void);
+
 void
 term_ntproc (int ignored)
 {
   (void)ignored;
+
+  remove_w32_kbdhook ();
 
   term_timers ();
 

@@ -350,6 +350,7 @@ To customize the Python interpreter for interactive use, modify
     (define-key map "\C-c\C-e" #'python-shell-send-statement)
     (define-key map "\C-c\C-r" #'python-shell-send-region)
     (define-key map "\C-\M-x"  #'python-shell-send-defun)
+    (define-key map "\C-c\C-b" #'python-shell-send-block)
     (define-key map "\C-c\C-c" #'python-shell-send-buffer)
     (define-key map "\C-c\C-l" #'python-shell-send-file)
     (define-key map "\C-c\C-z" #'python-shell-switch-to-shell)
@@ -390,6 +391,8 @@ To customize the Python interpreter for interactive use, modify
          :help "Switch to running inferior Python process"]
         ["Eval string" python-shell-send-string
          :help "Eval string in inferior Python session"]
+        ["Eval block" python-shell-send-block
+         :help "Eval block in inferior Python session"]
         ["Eval buffer" python-shell-send-buffer
          :help "Eval buffer in inferior Python session"]
         ["Eval statement" python-shell-send-statement
@@ -785,11 +788,30 @@ sign in chained assignment."
            "InterruptedError" "IsADirectoryError" "NotADirectoryError"
            "PermissionError" "ProcessLookupError" "RecursionError"
            "ResourceWarning" "StopAsyncIteration" "TimeoutError"
+           "ExceptionGroup"
            ;; OS specific
            "VMSError" "WindowsError"
            )
           symbol-end)
      . font-lock-type-face)
+    ;; single assignment with/without type hints, e.g.
+    ;;   a: int = 5
+    ;;   b: Tuple[Optional[int], Union[Sequence[str], str]] = (None, 'foo')
+    ;;   c: Collection = {1, 2, 3}
+    ;;   d: Mapping[int, str] = {1: 'bar', 2: 'baz'}
+    (,(python-font-lock-assignment-matcher
+       (python-rx grouped-assignment-target (* space)
+                  (? ?: (* space) (group (+ not-simple-operator)) (* space))
+                  (group assignment-operator)))
+     (1 font-lock-variable-name-face)
+     (3 'font-lock-operator-face)
+     (,(python-rx symbol-name)
+      (progn
+        (when-let ((type-start (match-beginning 2)))
+          (goto-char type-start))
+        (match-end 0))
+      nil
+      (0 font-lock-type-face)))
     ;; multiple assignment
     ;; (note that type hints are not allowed for multiple assignments)
     ;;   a, b, c = 1, 2, 3
@@ -822,18 +844,6 @@ sign in chained assignment."
         (match-beginning 2))            ; limit the search until the assignment
       nil
       (1 font-lock-variable-name-face)))
-    ;; single assignment with type hints, e.g.
-    ;;   a: int = 5
-    ;;   b: Tuple[Optional[int], Union[Sequence[str], str]] = (None, 'foo')
-    ;;   c: Collection = {1, 2, 3}
-    ;;   d: Mapping[int, str] = {1: 'bar', 2: 'baz'}
-    (,(python-font-lock-assignment-matcher
-       (python-rx (or line-start ?\;) (* space)
-                  grouped-assignment-target (* space)
-                  (? ?: (* space) (+ not-simple-operator) (* space))
-                  (group assignment-operator)))
-     (1 font-lock-variable-name-face)
-     (2 'font-lock-operator-face))
     ;; special cases
     ;;   (a) = 5
     ;;   [a] = 5,
@@ -1018,9 +1028,9 @@ It makes underscores and dots word constituent chars.")
     "copyright" "credits" "exit" "license" "quit"))
 
 (defvar python--treesit-operators
-  '("-" "-=" "!=" "*" "**" "**=" "*=" "/" "//" "//=" "/=" "&" "%" "%="
-    "^" "+" "->" "+=" "<" "<<" "<=" "<>" "=" ":=" "==" ">" ">=" ">>" "|"
-    "~" "@" "@="))
+  '("-" "-=" "!=" "*" "**" "**=" "*=" "/" "//" "//=" "/=" "&" "&=" "%" "%="
+    "^" "^=" "+" "->" "+=" "<" "<<" "<<=" "<=" "<>" "=" ":=" "==" ">" ">="
+    ">>" ">>=" "|" "|=" "~" "@" "@="))
 
 (defvar python--treesit-special-attributes
   '("__annotations__" "__closure__" "__code__"
@@ -1052,6 +1062,7 @@ It makes underscores and dots word constituent chars.")
     "InterruptedError" "IsADirectoryError" "NotADirectoryError"
     "PermissionError" "ProcessLookupError" "RecursionError"
     "ResourceWarning" "StopAsyncIteration" "TimeoutError"
+    "ExceptionGroup"
     ;; OS specific
     "VMSError" "WindowsError"
     ))
@@ -1202,17 +1213,20 @@ fontified."
      (class_definition
       name: (identifier) @font-lock-type-face)
      (parameters (identifier) @font-lock-variable-name-face)
+     (parameters (typed_parameter (identifier) @font-lock-variable-name-face))
      (parameters (default_parameter name: (identifier) @font-lock-variable-name-face)))
 
    :feature 'builtin
    :language 'python
-   `(((identifier) @font-lock-builtin-face
-      (:match ,(rx-to-string
-                `(seq bol
-                      (or ,@python--treesit-builtins
-                          ,@python--treesit-special-attributes)
-                      eol))
-              @font-lock-builtin-face)))
+   `((call function: (identifier) @font-lock-builtin-face
+           (:match ,(rx-to-string
+                     `(seq bol (or ,@python--treesit-builtins) eol))
+                   @font-lock-builtin-face))
+     (attribute attribute: (identifier) @font-lock-builtin-face
+                (:match ,(rx-to-string
+                          `(seq bol
+                                (or ,@python--treesit-special-attributes) eol))
+                        @font-lock-builtin-face)))
 
    :feature 'decorator
    :language 'python
@@ -1243,6 +1257,7 @@ fontified."
                            @font-lock-variable-name-face)
      (named_expression name: (identifier)
                        @font-lock-variable-name-face)
+     (for_statement left: (identifier) @font-lock-variable-name-face)
      (pattern_list [(identifier)
                     (list_splat_pattern (identifier))]
                    @font-lock-variable-name-face)
@@ -2852,7 +2867,7 @@ virtualenv."
   :type '(repeat symbol))
 
 (defcustom python-shell-compilation-regexp-alist
-  `((,(rx line-start (1+ (any " \t")) "File \""
+  `((,(rx line-start (1+ (any " \t")) (? ?| (1+ (any " \t"))) "File \""
           (group (1+ (not (any "\"<")))) ; avoid `<stdin>' &c
           "\", line " (group (1+ digit)))
      1 2)
@@ -2863,7 +2878,8 @@ virtualenv."
           "(" (group (1+ digit)) ")" (1+ (not (any "("))) "()")
      1 2))
   "`compilation-error-regexp-alist' for inferior Python."
-  :type '(alist regexp))
+  :type '(alist regexp)
+  :version "30.1")
 
 (defcustom python-shell-dedicated nil
   "Whether to make Python shells dedicated by default.
@@ -3601,6 +3617,7 @@ The coding cookie regexp is specified in PEP 263.")
           (python-shell-send-string-no-output python-shell-eval-file-setup-code))
         (with-current-buffer (current-buffer)
           (let ((inhibit-quit nil))
+            (python-shell-readline-detect)
             (run-hooks 'python-shell-first-prompt-hook))))))
   output)
 
@@ -4135,6 +4152,28 @@ interactively."
      (save-excursion (python-nav-end-of-statement))
      send-main msg t)))
 
+(defun python-shell-send-block (&optional arg msg)
+  "Send the block at point to inferior Python process.
+The block is delimited by `python-nav-beginning-of-block' and
+`python-nav-end-of-block'.  If optional argument ARG is non-nil
+\(interactively, the prefix argument), send the block body with
+its header.  If optional argument MSG is non-nil, force display
+of a user-friendly message if there's no process running; this
+always happens interactively."
+  (interactive (list current-prefix-arg t))
+  (let ((beg (save-excursion
+               (when (python-nav-beginning-of-block)
+                 (if arg
+                     (beginning-of-line)
+                   (python-nav-end-of-statement)
+                   (beginning-of-line 2)))
+               (point-marker)))
+        (end (save-excursion (python-nav-end-of-block)))
+        (python-indent-guess-indent-offset-verbose nil))
+    (if (and beg end)
+        (python-shell-send-region beg end nil msg t)
+      (user-error "Can't get code block from current position"))))
+
 (defun python-shell-send-buffer (&optional send-main msg)
   "Send the entire buffer to inferior Python process.
 When optional argument SEND-MAIN is non-nil, allow execution of
@@ -4361,7 +4400,23 @@ When a match is found, native completion is disabled."
 
 (defvar python-shell-readline-completer-delims nil
   "Word delimiters used by the readline completer.
-It is automatically set by Python shell.")
+It is automatically set by Python shell.  An empty string means no
+characters are considered delimiters and the readline completion
+considers the entire line of input.  A value of nil means the Python
+shell has no readline support.")
+
+(defun python-shell-readline-detect ()
+  "Detect the readline support for Python shell completion."
+  (let* ((process (python-shell-get-process))
+         (output (python-shell-send-string-no-output "
+try:
+    import readline
+    print(readline.get_completer_delims())
+except:
+    print('No readline support')" process)))
+    (setq-local python-shell-readline-completer-delims
+                (unless (string-search "No readline support" output)
+                  (string-trim-right output)))))
 
 (defvar python-shell-completion-native-redirect-buffer
   " *Python completions redirect*"
@@ -4501,10 +4556,6 @@ def __PYTHON_EL_native_completion_setup():
 __PYTHON_EL_native_completion_setup()" process)))
     (when (string-match-p "python\\.el: native completion setup loaded"
                           output)
-      (setq-local python-shell-readline-completer-delims
-                  (string-trim-right
-                   (python-shell-send-string-no-output
-                    "import readline; print(readline.get_completer_delims())")))
       (python-shell-completion-native-try))))
 
 (defun python-shell-completion-native-turn-off (&optional msg)
@@ -4533,7 +4584,8 @@ With argument MSG show activation/deactivation message."
       (cond
        ((python-shell-completion-native-interpreter-disabled-p)
         (python-shell-completion-native-turn-off msg))
-       ((python-shell-completion-native-setup)
+       ((and python-shell-readline-completer-delims
+             (python-shell-completion-native-setup))
         (when msg
           (message "Shell native completion is enabled.")))
        (t
@@ -4692,6 +4744,8 @@ as one line, which is required by native completion."
 Optional argument PROCESS forces completions to be retrieved
 using that one instead of current buffer's process."
   (setq process (or process (get-buffer-process (current-buffer))))
+  (unless process
+    (user-error "No active python inferior process"))
   (let* ((is-shell-buffer (derived-mode-p 'inferior-python-mode))
          (line-start (if is-shell-buffer
                          ;; Working on a shell buffer: use prompt end.
@@ -4705,7 +4759,8 @@ using that one instead of current buffer's process."
                (with-current-buffer (process-buffer process)
                  (if python-shell-completion-native-enable
                      (string= python-shell-readline-completer-delims "")
-                   (string-match-p "ipython[23]?\\'" python-shell-interpreter)))))
+                   (or (string-match-p "ipython[23]?\\'" python-shell-interpreter)
+                       (equal python-shell-readline-completer-delims ""))))))
          (start
           (if (< (point) line-start)
               (point)
@@ -6595,7 +6650,7 @@ returned as is."
 
 (defcustom python-flymake-command '("pyflakes")
   "The external tool that will be used to perform the syntax check.
-This is a non empty list of strings, the checker tool possibly followed by
+This is a non-empty list of strings: the checker tool possibly followed by
 required arguments.  Once launched it will receive the Python source to be
 checked as its standard input.
 To use `flake8' you would set this to (\"flake8\" \"-\").
@@ -7128,6 +7183,8 @@ implementations: `python-mode' and `python-ts-mode'."
     (add-to-list 'auto-mode-alist '("\\.py[iw]?\\'" . python-ts-mode))
     (add-to-list 'interpreter-mode-alist '("python[0-9.]*" . python-ts-mode))))
 
+(derived-mode-add-parents 'python-ts-mode '(python-mode))
+
 ;;; Completion predicates for M-x
 ;; Commands that only make sense when editing Python code.
 (dolist (sym '(python-add-import
@@ -7159,6 +7216,7 @@ implementations: `python-mode' and `python-ts-mode'."
                python-nav-if-name-main
                python-nav-up-list
                python-remove-import
+               python-shell-send-block
                python-shell-send-buffer
                python-shell-send-defun
                python-shell-send-statement
