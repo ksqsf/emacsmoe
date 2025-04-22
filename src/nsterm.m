@@ -44,6 +44,7 @@ GNUstep port and post-20 update by Adrian Robert (arobert@cogsci.ucsd.edu)
 
 #include "lisp.h"
 #include "blockinput.h"
+#include "dispextern.h"
 #include "sysselect.h"
 #include "nsterm.h"
 #include "systime.h"
@@ -71,6 +72,7 @@ GNUstep port and post-20 update by Adrian Robert (arobert@cogsci.ucsd.edu)
 #include "macfont.h"
 #include <Carbon/Carbon.h>
 #include <IOSurface/IOSurface.h>
+#include <QuartzCore/QuartzCore.h>
 #endif
 
 static EmacsMenu *dockMenu;
@@ -3016,6 +3018,12 @@ ns_draw_fringe_bitmap (struct window *w, struct glyph_row *row,
   ns_unfocus (f);
 }
 
+static double
+ns_get_cursor_animation_duration (void)
+{
+  Lisp_Object duration = Fsymbol_value (intern_c_string ("ns-cursor-animation-duration"));
+  return NUMBERP (duration) ? XFLOATINT (duration) : 0.1;
+}
 
 static void
 ns_draw_window_cursor (struct window *w, struct glyph_row *glyph_row,
@@ -3100,6 +3108,46 @@ ns_draw_window_cursor (struct window *w, struct glyph_row *glyph_row,
 
   /* Prevent the cursor from being drawn outside the text area.  */
   r = NSIntersectionRect (r, ns_row_rect (w, glyph_row, TEXT_AREA));
+
+  /* The original Emacs uses the following ctx-related stuff to draw
+     the cursor. Here we use the CA layer directly if possible. */
+  EmacsView *view = FRAME_NS_VIEW (f);
+  CALayer *cursor_layer = view->cursor_layer;
+
+  if (active_p && cursor_layer) {
+    NSRect r2 = r;
+    r2.origin.y = [view bounds].size.height - r2.size.height - r2.origin.y;
+    cursor_glyph = get_phys_cursor_glyph (w);
+    if ((cursor_glyph->resolved_level & 1) != 0)
+      r2.origin.x += cursor_glyph->pixel_width - r2.size.width;
+
+    switch (cursor_type)
+      {
+      case DEFAULT_CURSOR:
+      case NO_CURSOR:
+        /* Make the layer invisible. */
+        cursor_layer.opacity = 0.0;
+        cursor_layer.backgroundColor = nil;
+        cursor_layer.frame = r2;
+        break;
+      case FILLED_BOX_CURSOR:
+      case HOLLOW_BOX_CURSOR:
+      case HBAR_CURSOR:
+      case BAR_CURSOR:
+        [CATransaction begin];
+        [CATransaction setAnimationDuration:ns_get_cursor_animation_duration ()];
+        [CATransaction setCompletionBlock:^{
+              cursor_layer.backgroundColor = nil; /* hide after animation */
+              cursor_layer.opacity = 0.0;
+        }];
+        cursor_layer.backgroundColor = FRAME_CURSOR_COLOR (f).CGColor;
+        cursor_layer.opacity = 1.0;
+        cursor_layer.frame = r2;
+        [CATransaction commit];
+        break;
+    }
+  }
+  /* Below is the original Emacs drawing code for the cursor. */
 
   ns_focus (f, NULL, 0);
 
@@ -9233,6 +9281,18 @@ ns_in_echo_area (void)
       [self setDelegate:view];
       [[self contentView] addSubview:view];
       [self makeFirstResponder:view];
+
+      /* Overlay a canvas view on top of EmacsView.  */
+      NSView *canvasView = [[NSView alloc] initWithFrame:view.bounds];
+      canvasView.wantsLayer = YES;
+      canvasView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      [view addSubview:canvasView positioned:NSWindowAbove relativeTo:nil];
+
+      /* Create a cursor layer on the canvas.  */
+      view->cursor_layer = [CALayer layer];
+      [canvasView.layer addSublayer: view->cursor_layer];
+      view->cursor_layer.frame = CGRectMake(0, 0, 0, 0);
+
 
 #if !defined (NS_IMPL_COCOA) || MAC_OS_X_VERSION_MIN_REQUIRED <= 1090
 #if MAC_OS_X_VERSION_MAX_ALLOWED > 1090

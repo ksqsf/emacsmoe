@@ -65,6 +65,13 @@
 ;; nsterm.m.
 (defvar ns-input-file)
 
+(defcustom ns-cursor-animation-duration 0.1
+  "Duration in seconds for cursor animation on macOS.
+This controls how long the cursor animation takes when changing position or style.
+A value of 0 disables animation."
+  :type 'number
+  :group 'ns)
+
 (defun ns-handle-nxopen (_switch &optional temp)
   (setq unread-command-events (append unread-command-events
                                       (if temp '(ns-open-temp-file)
